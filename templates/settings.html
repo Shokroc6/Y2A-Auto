@@ -159,6 +159,14 @@
                                                         自动翻译描述
                                                     </label>
                                                     <label class="checkbox-label">
+                                                        <input type="checkbox" name="BILINGUAL_TITLE" {% if config.BILINGUAL_TITLE %}checked{% endif %}>
+                                                        双语标题（译文在前，超长优先保留译文；需启用翻译）
+                                                    </label>
+                                                    <label class="checkbox-label">
+                                                        <input type="checkbox" name="BILINGUAL_DESCRIPTION" {% if config.BILINGUAL_DESCRIPTION %}checked{% endif %}>
+                                                        双语简介（译文在前，原文段落在后；需启用翻译）
+                                                    </label>
+                                                    <label class="checkbox-label">
                                                         <input type="checkbox" name="GENERATE_TAGS" {% if config.GENERATE_TAGS %}checked{% endif %}>
                                                         自动生成标签
                                                     </label>
@@ -1542,6 +1550,10 @@
                                                             <label class="checkbox-label">
                                                                 <input type="checkbox" name="SUBTITLE_KEEP_ORIGINAL" {% if config.SUBTITLE_KEEP_ORIGINAL %}checked{% endif %}>
                                                                 保留原始字幕文件
+                                                            </label>
+                                                            <label class="checkbox-label">
+                                                                <input type="checkbox" name="BILINGUAL_SUBTITLES" {% if config.BILINGUAL_SUBTITLES %}checked{% endif %}>
+                                                                双语字幕（译文在上、原文在下；关闭仅输出译文）
                                                             </label>
                                                         </div>
                                                         <div class="col-md-6">

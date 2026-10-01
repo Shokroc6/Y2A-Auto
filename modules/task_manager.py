@@ -600,6 +600,33 @@ def _get_upload_platforms_for_target(upload_target):
     return [UPLOAD_TARGET_ACFUN]
 
 
+def _compose_upload_metadata(task, config):
+    """Compose at the boundary; stored translations stay monolingual on retries.
+
+    Translation first. Titles only append the whole source when it fits; descriptions
+    are clipped later by each platform, after reserving the repost notice budget.
+    """
+    from .speech_pipeline_settings import coerce_bool
+    task = task or {}
+    limits = _get_effective_metadata_limits(_get_task_upload_target(task))
+    result = []
+    for prefix, key, separator in (
+        ('video_title', 'BILINGUAL_TITLE', ' | '),
+        ('description', 'BILINGUAL_DESCRIPTION', '\n\n'),
+    ):
+        source = str(task.get(prefix + '_original') or '').strip()
+        translated = str(task.get(prefix + '_translated') or '').strip()
+        value = translated or source
+        if coerce_bool(config.get(key, True)) and source and translated and source != translated:
+            combined = translated + separator + source
+            if prefix == 'description' or len(combined) <= limits['title_limit']:
+                value = combined
+        if prefix == 'video_title':
+            value = value[:limits['title_limit']]
+        result.append(value)
+    return tuple(result)
+
+
 def _get_effective_metadata_limits(upload_target):
     """返回当前任务应执行的标题/简介限制。
 
@@ -3620,11 +3647,18 @@ class TaskProcessor:
                     if not isinstance(name, str):
                         continue
                     lower = name.lower()
+                    # Generated output is never a translation input on retry.
+                    if lower.startswith('translated_'):
+                        continue
                     if lower.endswith('.srt'):
                         subtitle_files.append(os.path.join(task_dir, name))
                     elif lower.endswith('.vtt'):
-                        # 自动将 VTT 转换为 SRT
                         vtt_path = os.path.join(task_dir, name)
+                        if translation_enabled and _as_bool(self.config.get('BILINGUAL_SUBTITLES', True)):
+                            # The translator's VTT reader preserves literal entities and braces.
+                            subtitle_files.append(vtt_path)
+                            continue
+                        # Keep the existing conversion for non-bilingual/embed-only flows.
                         srt_path = self._convert_vtt_to_srt(vtt_path, task_logger)
                         if srt_path and os.path.exists(srt_path):
                             subtitle_files.append(srt_path)
@@ -6934,6 +6968,7 @@ class TaskProcessor:
         prefer_single_line=True,
         single_line_min_font_scale=None,
         style_overrides=None,
+        preserve_lines=False,
     ):
         style, force_style = cls._build_subtitle_style_description(
             font_family,
@@ -7000,6 +7035,17 @@ class TaskProcessor:
                 wrap_meta = {}
             if not text:
                 continue
+            if preserve_lines:
+                # Only explicitly bilingual artifacts preserve authored line boundaries.
+                text = r'\N'.join(
+                    cls._wrap_subtitle_text_for_ass(
+                        line, video_width, video_height,
+                        prefer_single_line=prefer_single_line,
+                        single_line_min_font_scale=single_line_min_font_scale,
+                        style_overrides=style_overrides,
+                    )
+                    for line in cue_dict.get('text', '').splitlines() if line.strip()
+                )
             if wrap_meta.get('forced_wrap'):
                 forced_wrap_count += 1
             if wrap_meta.get('font_override'):
@@ -7070,11 +7116,19 @@ class TaskProcessor:
                 return False
 
             config = getattr(self, 'config', {}) or {}
+            preserve_lines = (
+                _as_bool(config.get('BILINGUAL_SUBTITLES', True))
+                and os.path.basename(subtitle_path).startswith('translated_')
+            )
+            if preserve_lines:
+                from .srt_transform_engine import SrtTransformEngine, SrtTransformConfig
+                cues = SrtTransformEngine(SrtTransformConfig()).parse_srt(subtitle_content)
             if style_overrides is None:
                 # 未显式指定时按当前配置解析，避免任何调用方漏传导致外观配置静默失效。
                 style_overrides = self._resolve_subtitle_style_overrides(task_logger)
             ass_content = self._build_default_ass_document(
                 cues,
+                preserve_lines=preserve_lines,
                 font_family=font_family,
                 video_width=video_width,
                 video_height=video_height,
@@ -8614,9 +8668,8 @@ class TaskProcessor:
         task_logger.info("开始内容审核")
         update_task(task_id, status=TASK_STATES['MODERATING'])
         
-        # 优先使用翻译后的标题和描述，如果没有则使用原始内容
-        title = task.get('video_title_translated', '') or task.get('video_title_original', '')
-        description = task.get('description_translated', '') or task.get('description_original', '')
+        # 审核实际组合的双语正文，不因保留原文而绕过既有审核流程。
+        title, description = _compose_upload_metadata(task, self.config)
         
         # 获取AI生成的标签
         tags_string = ""
@@ -9300,8 +9353,7 @@ class TaskProcessor:
         # 获取任务信息
         video_path = task.get('video_path_local', '') if task else ''
         cover_path = task.get('cover_path_local', '') if task else ''
-        title = (task.get('video_title_translated', '') or task.get('video_title_original', '')) if task else ''
-        description = (task.get('description_translated', '') or task.get('description_original', '')) if task else ''
+        title, description = _compose_upload_metadata(task, self.config)
         partition_id = _get_task_partition_id(task, UPLOAD_TARGET_ACFUN, prefer_selected=True) if task else ''
         missing_translation_fields = _get_missing_required_translation_fields(task, self.config)
         if missing_translation_fields:
@@ -9356,7 +9408,7 @@ class TaskProcessor:
         
         # 获取元数据
         metadata_path = task.get('metadata_json_path_local', '') if task else ''
-        original_url = ''
+        original_url = task.get('youtube_url', '') if task else ''
         original_uploader = ''
         original_upload_date = ''
         
@@ -9364,7 +9416,9 @@ class TaskProcessor:
             try:
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
-                    original_url = metadata.get('webpage_url', '')
+                    metadata_url = metadata.get('webpage_url')
+                    if isinstance(metadata_url, str) and metadata_url.strip():
+                        original_url = metadata_url
                     original_uploader = metadata.get('uploader', '')
                     original_upload_date = metadata.get('upload_date', '')
             except Exception as e:
@@ -9544,8 +9598,7 @@ class TaskProcessor:
 
         video_path = task.get('video_path_local', '') if task else ''
         cover_path = task.get('cover_path_local', '') if task else ''
-        title = (task.get('video_title_translated', '') or task.get('video_title_original', '')) if task else ''
-        description = (task.get('description_translated', '') or task.get('description_original', '')) if task else ''
+        title, description = _compose_upload_metadata(task, self.config)
         upload_target = _get_task_upload_target(task)
         effective_limits = _get_effective_metadata_limits(upload_target)
         partition_id = ''

@@ -447,6 +447,7 @@ class TranslationConfig:
     allow_partial: bool = SUBTITLE_ALLOW_PARTIAL_DEFAULT
     # 单批字符预算：批内 source_text 长度之和上限，超限即另起一批。
     max_chars_per_batch: int = SUBTITLE_MAX_CHARS_PER_BATCH_DEFAULT
+    bilingual: bool = False
 
 class SubtitleReader:
     """字幕文件读取器"""
@@ -524,7 +525,7 @@ class SubtitleReader:
         return merged_text
     
     @staticmethod
-    def read_srt(file_path: str) -> List[SubtitleItem]:
+    def read_srt(file_path: str, preserve_lines: bool = False) -> List[SubtitleItem]:
         """读取SRT字幕文件（兼容更宽松的SRT变体与ASR输出）"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -545,7 +546,7 @@ class SubtitleReader:
             blocks: List[SubtitleItem] = []
             if matches:
                 for index, start_time, end_time, text in matches:
-                    processed_text = SubtitleReader._preprocess_subtitle_text(text)
+                    processed_text = text.strip() if preserve_lines else SubtitleReader._preprocess_subtitle_text(text)
                     if processed_text:
                         # 统一时间为SRT逗号毫秒
                         st = start_time.replace('.', ',')
@@ -561,7 +562,7 @@ class SubtitleReader:
                 pattern_loose = r'(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\n(.*?)(?=\n\d{1,2}:\d{2}:\d{2}|\Z)'
                 loose_matches = re.findall(pattern_loose, content, re.DOTALL)
                 for i, (start_time, end_time, text) in enumerate(loose_matches, 1):
-                    processed_text = SubtitleReader._preprocess_subtitle_text(text)
+                    processed_text = text.strip() if preserve_lines else SubtitleReader._preprocess_subtitle_text(text)
                     if processed_text:
                         st = start_time.replace('.', ',')
                         et = end_time.replace('.', ',')
@@ -585,30 +586,28 @@ class SubtitleReader:
             with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
             
-            # 移除WEBVTT头部
-            lines = content.split('\n')
-            if lines[0].startswith('WEBVTT'):
-                lines = lines[1:]
-            
-            # VTT格式解析
-            content = '\n'.join(lines)
-            pattern = r'(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})\n(.*?)(?=\n\d{2}:\d{2}|\Z)'
-            matches = re.findall(pattern, content, re.DOTALL)
-            
+            import html
             items = []
-            for i, match in enumerate(matches, 1):
-                start_time, end_time, text = match
-                
-                # 前处理字幕文本：将多行改为单行
-                processed_text = SubtitleReader._preprocess_subtitle_text(text)
-                
-                if processed_text:
-                    items.append(SubtitleItem(
-                        index=i,
-                        start_time=start_time.replace('.', ','),  # 转换为SRT格式
-                        end_time=end_time.replace('.', ','),
-                        source_text=processed_text
-                    ))
+            timestamp = r'(?:\d{2,}:)?\d{2}:\d{2}\.\d{3}'
+            for block in re.split(r'\n\s*\n', content.replace('\r\n', '\n')):
+                lines = block.strip().splitlines()
+                if not lines or lines[0].startswith(('WEBVTT', 'NOTE', 'STYLE', 'REGION')):
+                    continue
+                for position, line in enumerate(lines):
+                    match = re.fullmatch(rf'({timestamp})\s*-->\s*({timestamp})(?:\s+.*)?', line.strip())
+                    if not match:
+                        continue
+                    start_time, end_time = match.groups()
+                    text = '\n'.join(lines[position + 1:]).strip()
+                    text = html.unescape(re.sub(r'<[^>]*>', '', text))
+                    if text:
+                        items.append(SubtitleItem(
+                            index=len(items) + 1,
+                            start_time=('00:' + start_time if start_time.count(':') == 1 else start_time).replace('.', ','),
+                            end_time=('00:' + end_time if end_time.count(':') == 1 else end_time).replace('.', ','),
+                            source_text=text,
+                        ))
+                    break
             
             logger.info(f"VTT文件读取完成，共{len(items)}条字幕（已进行前处理）")
             return items
@@ -636,7 +635,7 @@ class SubtitleWriter:
         return '\n'.join(normalized_lines)
 
     @staticmethod
-    def write_srt(items: List[SubtitleItem], output_path: str, translated: bool = True):
+    def write_srt(items: List[SubtitleItem], output_path: str, translated: bool = True, bilingual: bool = False):
         """写入SRT字幕文件"""
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
@@ -648,7 +647,9 @@ class SubtitleWriter:
                     #   （SubtitleItem.residual_untranslated）并清空译文，此处回退为原文，
                     #   属于显式容忍的原文/译文混排行为，已在验收阶段记录 warning。
                     text = item.translated_text if translated and item.translated_text else item.source_text
-                    if translated:
+                    if translated and bilingual:
+                        text = '\n'.join(dict.fromkeys(filter(None, [item.translated_text.strip(), item.source_text.strip()])))
+                    elif translated:
                         text = SubtitleWriter._strip_terminal_full_stop(text)
                     f.write(f"{item.index}\n")
                     f.write(f"{item.time_range}\n")
@@ -658,7 +659,7 @@ class SubtitleWriter:
             logger.error(f"写入SRT文件失败: {e}")
     
     @staticmethod
-    def write_vtt(items: List[SubtitleItem], output_path: str, translated: bool = True):
+    def write_vtt(items: List[SubtitleItem], output_path: str, translated: bool = True, bilingual: bool = False):
         """写入VTT字幕文件"""
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
@@ -666,8 +667,13 @@ class SubtitleWriter:
                 for item in items:
                     # 空译文回退原文的语义同 write_srt（见上方注释）
                     text = item.translated_text if translated and item.translated_text else item.source_text
-                    if translated:
+                    if translated and bilingual:
+                        text = '\n'.join(dict.fromkeys(filter(None, [item.translated_text.strip(), item.source_text.strip()])))
+                    elif translated:
                         text = SubtitleWriter._strip_terminal_full_stop(text)
+                    # Cue text is plain text: escape before serializing VTT markup.
+                    import html
+                    text = html.escape(text, quote=False)
                     start_time = item.start_time.replace(',', '.')
                     end_time = item.end_time.replace(',', '.')
                     f.write(f"{start_time} --> {end_time}\n")
@@ -1397,7 +1403,7 @@ class SubtitleTranslator:
             # 检测文件格式并读取
             file_ext = Path(input_path).suffix.lower()
             if file_ext == '.srt':
-                items = self.reader.read_srt(input_path)
+                items = self.reader.read_srt(input_path, preserve_lines=self.config.bilingual)
             elif file_ext == '.vtt':
                 items = self.reader.read_vtt(input_path)
             else:
@@ -1909,9 +1915,9 @@ class SubtitleTranslator:
         try:
             output_ext = Path(output_path).suffix.lower()
             if output_ext == '.srt':
-                self.writer.write_srt(items, output_path, translated=True)
+                self.writer.write_srt(items, output_path, translated=True, bilingual=self.config.bilingual)
             elif output_ext == '.vtt':
-                self.writer.write_vtt(items, output_path, translated=True)
+                self.writer.write_vtt(items, output_path, translated=True, bilingual=self.config.bilingual)
             else:
                 self.logger.error(f"不支持的输出格式: {output_ext}")
                 return False
@@ -2007,6 +2013,7 @@ def create_translator_from_config(app_config: Dict, task_id: Optional[str] = Non
             logger.debug(f"读取 Prompt 中心配置失败，将回退 builtin: {exc}")
 
         translation_config = TranslationConfig(
+            bilingual=coerce_bool(app_config.get('BILINGUAL_SUBTITLES', True)),
             source_language=app_config.get('SUBTITLE_SOURCE_LANGUAGE', 'auto'),
             target_language=app_config.get('SUBTITLE_TARGET_LANGUAGE', 'zh'),
             api_provider=app_config.get('SUBTITLE_API_PROVIDER', 'openai'),

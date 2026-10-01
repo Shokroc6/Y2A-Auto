@@ -36,6 +36,9 @@ DEFAULT_CONFIG = {
     "AUTO_MODE_ENABLED": False, # 无人值守自动投稿总开关
     "TRANSLATE_TITLE": False,
     "TRANSLATE_DESCRIPTION": False,
+    "BILINGUAL_TITLE": True,
+    "BILINGUAL_DESCRIPTION": True,
+    "BILINGUAL_SUBTITLES": True,
     "UPLOAD_APPEND_REPOST_NOTICE": True,
     "DELETE_DOWNLOAD_FILES_AFTER_UPLOAD": False, # 上传全部成功后是否立即删除任务下载文件
     "GENERATE_TAGS": False,

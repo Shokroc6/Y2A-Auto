@@ -77,9 +77,17 @@ def build_upload_description(
     - 转载且 append_repost_notice=True: 转载声明 + 摘要
     - 其他情况: 仅正文摘要
     """
+    def multiline(text, budget):
+        text = str(text or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+        if budget <= 0:
+            return ''
+        if len(text) <= budget:
+            return text
+        return text[:budget - 3] + '...' if budget > 3 else text[:budget]
+
     is_repost = bool(original_url or original_uploader or original_upload_date)
     if not is_repost or not append_repost_notice:
-        return compact_text(base_desc, max_len)
+        return multiline(base_desc, max_len)
 
     repost_notice = "本视频转载自YouTube"
     if original_upload_date:
@@ -88,7 +96,7 @@ def build_upload_description(
         repost_notice += f"，UP主：{original_uploader}"
     repost_notice = compact_text(repost_notice, max_len)
 
-    summary = compact_text(base_desc, max(0, max_len - len(repost_notice) - 2))
+    summary = multiline(base_desc, max(0, max_len - len(repost_notice) - 2))
     if not summary:
         return repost_notice
     return f"{repost_notice}\n\n{summary}"
