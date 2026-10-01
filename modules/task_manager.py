@@ -3830,7 +3830,7 @@ class TaskProcessor:
                         qc_cleared = True
                         qc_failed = False
             
-            # 优化选择策略：若有中文字幕则直接烧录；否则优先选英文字幕进行翻译
+            # 双语优先选源字幕走翻译链；单语或缺少源字幕时保留中文直烧。
             detected_list = []
             for f in subtitle_files:
                 lang = self._detect_subtitle_language(f)
@@ -3838,8 +3838,26 @@ class TaskProcessor:
             zh_candidates = [f for f, lang in detected_list if str(lang).lower().startswith('zh')]
             en_candidates = [f for f, lang in detected_list if str(lang).lower().startswith('en')]
             
-            if zh_candidates:
-                # 直接使用中文字幕，不进行翻译
+            source_language = str(self.config.get('SUBTITLE_SOURCE_LANGUAGE') or 'auto').strip().lower()
+            source_language = source_language.replace('_', '-').split('-')[0]
+            if source_language == 'auto':
+                # 默认仍优先英文，但不能把已有中文当作双语源文。
+                bilingual_source_candidates = (
+                    en_candidates or [f for f, lang in detected_list if not str(lang).lower().startswith('zh')]
+                )
+            else:
+                bilingual_source_candidates = [
+                    f for f, lang in detected_list
+                    if str(lang).lower() == source_language and source_language != 'zh'
+                ]
+            use_bilingual_source = (
+                translation_enabled
+                and _as_bool(self.config.get('BILINGUAL_SUBTITLES', True))
+                and bool(bilingual_source_candidates)
+            )
+
+            if zh_candidates and not use_bilingual_source:
+                # 关闭双语或没有源字幕时，保留中文字幕单语回退，不伪造源文。
                 subtitle_file = zh_candidates[0]
                 subtitle_lang = 'zh'
                 task_logger.info(f"检测到中文字幕，直接烧录，无需翻译: {os.path.basename(subtitle_file)}")
@@ -3943,8 +3961,11 @@ class TaskProcessor:
                 task_logger.info("字幕翻译和烧录均未启用，仅记录字幕文件")
                 return True
             
-            # 没有中文：优先选择英文，否则退回第一个文件
-            subtitle_file = en_candidates[0] if en_candidates else subtitle_files[0]
+            # 双语使用选定源语言，其余保持原有的英文优先回退。
+            subtitle_file = (
+                bilingual_source_candidates[0] if use_bilingual_source
+                else (en_candidates[0] if en_candidates else subtitle_files[0])
+            )
             task_logger.info(f"找到字幕文件: {os.path.basename(subtitle_file)}")
             subtitle_lang = self._detect_subtitle_language(subtitle_file)
             task_logger.info(f"检测到字幕语言: {subtitle_lang}")
