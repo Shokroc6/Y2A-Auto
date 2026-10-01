@@ -1,4 +1,6 @@
 """Run tests with all application runtime paths isolated; deny network access."""
+from contextlib import chdir
+import logging
 import os
 import pathlib
 import socket
@@ -19,8 +21,8 @@ def deny_network(*args, **kwargs):
 
 if __name__ == '__main__':
     with tempfile.TemporaryDirectory(prefix='y2a-offline-') as directory:
-        os.chdir(directory)
-        with patch.object(utils, 'get_app_root_dir', return_value=directory), \
+        with chdir(directory), \
+             patch.object(utils, 'get_app_root_dir', return_value=directory), \
              patch.object(utils, 'get_app_subdir', side_effect=lambda name: os.path.join(directory, name)), \
              patch.object(BackgroundScheduler, 'start'), \
              patch.object(socket.socket, 'connect', deny_network), \
@@ -38,4 +40,10 @@ if __name__ == '__main__':
                         args.append(str(path))
                 print('Excluded app-import tests:', ', '.join(excluded))
                 args.append('-q')
-            raise SystemExit(pytest.main(['-p', 'no:cacheprovider', *args]))
+            try:
+                exit_code = pytest.main(['-p', 'no:cacheprovider', *args])
+            finally:
+                # Windows cannot remove logs while application handlers own them.
+                # This standalone runner is exiting; close handlers before cleanup.
+                logging.shutdown()
+    raise SystemExit(exit_code)

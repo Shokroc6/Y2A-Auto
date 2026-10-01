@@ -73,7 +73,7 @@ jobs:
 
       - name: Run workflow contract tests
         run: |
-          python -m pytest tests/test_windows_preview.py -q -p no:cacheprovider
+          python -m pytest tests/test_windows_preview.py tests/test_offline_runner_cleanup.py -q -p no:cacheprovider
           if ($LASTEXITCODE -ne 0) { throw 'Preview contract tests failed' }
 
       - name: Run isolated bilingual tests including real burn-in
