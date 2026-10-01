@@ -540,7 +540,10 @@ class SubtitleReader:
 
             # 先尝试严格格式：带编号的块
             # 小时位放宽为1-2位，兼容 0:00:01,920 与 00:00:01,920
-            pattern_strict = r'(\d+)\n(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\n(.*?)(?=\n\d+\n|\Z)'
+            timestamp = r'\d{1,2}:\d{2}:\d{2}[,.]\d{3}'
+            # 数字正文不是编号边界；后面必须紧接完整的时间行。
+            cue_header = rf'\d+\n{timestamp}\s*-->\s*{timestamp}\n'
+            pattern_strict = rf'(\d+)\n({timestamp})\s*-->\s*({timestamp})\n(.*?)(?=\n{cue_header}|\Z)'
             matches = re.findall(pattern_strict, content, re.DOTALL)
 
             blocks: List[SubtitleItem] = []

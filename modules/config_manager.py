@@ -39,6 +39,7 @@ DEFAULT_CONFIG = {
     "BILINGUAL_TITLE": True,
     "BILINGUAL_DESCRIPTION": True,
     "BILINGUAL_SUBTITLES": True,
+    "SUBTITLE_EXISTING_TARGET_STRATEGY": "prefer_existing",
     "UPLOAD_APPEND_REPOST_NOTICE": True,
     "DELETE_DOWNLOAD_FILES_AFTER_UPLOAD": False, # 上传全部成功后是否立即删除任务下载文件
     "GENERATE_TAGS": False,
@@ -519,6 +520,9 @@ def update_config(new_config):
             elif key in ('password', 'COOKIECLOUD_PASSWORD'):
                 if str(new_config[key]).strip(): # Only update password if a new one is provided
                     current_config[key] = new_config[key]
+            elif key == 'SUBTITLE_EXISTING_TARGET_STRATEGY':
+                current_config[key] = ('retranslate' if new_config[key] == 'retranslate'
+                                       else 'prefer_existing')
             elif key == 'VIDEO_ENCODER':
                 # 支持硬件编码：auto/cpu/nvidia/intel/amd
                 encoder_value = str(new_config[key]).lower().strip()

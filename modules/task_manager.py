@@ -3654,7 +3654,7 @@ class TaskProcessor:
                         subtitle_files.append(os.path.join(task_dir, name))
                     elif lower.endswith('.vtt'):
                         vtt_path = os.path.join(task_dir, name)
-                        if translation_enabled and _as_bool(self.config.get('BILINGUAL_SUBTITLES', True)):
+                        if _as_bool(self.config.get('BILINGUAL_SUBTITLES', True)):
                             # The translator's VTT reader preserves literal entities and braces.
                             subtitle_files.append(vtt_path)
                             continue
@@ -3830,37 +3830,66 @@ class TaskProcessor:
                         qc_cleared = True
                         qc_failed = False
             
-            # 双语优先选源字幕走翻译链；单语或缺少源字幕时保留中文直烧。
-            detected_list = []
-            for f in subtitle_files:
-                lang = self._detect_subtitle_language(f)
-                detected_list.append((f, lang))
-            zh_candidates = [f for f, lang in detected_list if str(lang).lower().startswith('zh')]
-            en_candidates = [f for f, lang in detected_list if str(lang).lower().startswith('en')]
-            
-            source_language = str(self.config.get('SUBTITLE_SOURCE_LANGUAGE') or 'auto').strip().lower()
-            source_language = source_language.replace('_', '-').split('-')[0]
-            if source_language == 'auto':
-                # 默认仍优先英文，但不能把已有中文当作双语源文。
-                bilingual_source_candidates = (
-                    en_candidates or [f for f, lang in detected_list if not str(lang).lower().startswith('zh')]
-                )
-            else:
-                bilingual_source_candidates = [
-                    f for f, lang in detected_list
-                    if str(lang).lower() == source_language and source_language != 'zh'
-                ]
+            # Filename metadata is not content-language detection. Auto reuse requires
+            # exactly one labelled non-target track; never guess English among many.
+            import re
+            def language_base(value):
+                return str(value or '').strip().lower().replace('_', '-').split('-')[0]
+            source_language = language_base(self.config.get('SUBTITLE_SOURCE_LANGUAGE', 'auto'))
+            target_language = language_base(self.config.get('SUBTITLE_TARGET_LANGUAGE', 'zh'))
+            detected_list = [(f, language_base(self._detect_subtitle_language(f)))
+                             for f in sorted(set(subtitle_files))]
+            target_candidates = [f for f, lang in detected_list if lang == target_language]
+            en_candidates = [f for f, lang in detected_list if lang == 'en']
+            bilingual_source_candidates = [
+                f for f, lang in detected_list
+                if lang != target_language and re.fullmatch(r'[a-z]{2,3}', lang)
+                and lang not in ('auto', 'und')
+                and (source_language == 'auto' or lang == source_language)
+            ]
+            if len(bilingual_source_candidates) != 1:
+                bilingual_source_candidates = []
             use_bilingual_source = (
                 translation_enabled
                 and _as_bool(self.config.get('BILINGUAL_SUBTITLES', True))
                 and bool(bilingual_source_candidates)
             )
 
-            if zh_candidates and not use_bilingual_source:
+            subtitle_reuse_warning = None
+            if (translation_enabled and source_language != 'auto'
+                    and not bilingual_source_candidates and not target_candidates):
+                subtitle_reuse_warning = '缺少配置的源语言字幕，未调用翻译；保留现有单语字幕'
+                task_logger.warning(subtitle_reuse_warning)
+                update_task(task_id, subtitle_warning_message=subtitle_reuse_warning)
+                translation_enabled = False
+            if (_as_bool(self.config.get('BILINGUAL_SUBTITLES', True)) and target_candidates
+                    and not bilingual_source_candidates):
+                subtitle_reuse_warning = '缺少唯一可靠的源语言字幕，回退目标单语字幕；请核对源语言设置和文件语言标签'
+                task_logger.warning(subtitle_reuse_warning)
+                update_task(task_id, subtitle_warning_message=subtitle_reuse_warning)
+            merged_subtitle_path = None
+            if (_as_bool(self.config.get('BILINGUAL_SUBTITLES', True))
+                    and self.config.get('SUBTITLE_EXISTING_TARGET_STRATEGY', 'prefer_existing') != 'retranslate'
+                    and target_candidates and bilingual_source_candidates):
+                from modules.existing_subtitle_merge import merge_existing_tracks
+                merged_subtitle_path = os.path.join(task_dir, f'translated_{task_id}.srt')
+                try:
+                    if len(target_candidates) != 1:
+                        raise ValueError('存在多个目标语言字幕，无法确定应合并的轨道')
+                    merge_existing_tracks(bilingual_source_candidates[0], target_candidates[0], merged_subtitle_path)
+                    use_bilingual_source = True
+                except (ValueError, OSError) as exc:
+                    merged_subtitle_path = None
+                    subtitle_reuse_warning = f'已有字幕时间对齐失败：{exc}；' + (
+                        '按已启用的翻译设置回退' if translation_enabled else '翻译未启用，回退目标单语字幕')
+                    task_logger.warning(subtitle_reuse_warning)
+                    update_task(task_id, subtitle_warning_message=subtitle_reuse_warning)
+
+            if target_candidates and not use_bilingual_source:
                 # 关闭双语或没有源字幕时，保留中文字幕单语回退，不伪造源文。
-                subtitle_file = zh_candidates[0]
-                subtitle_lang = 'zh'
-                task_logger.info(f"检测到中文字幕，直接烧录，无需翻译: {os.path.basename(subtitle_file)}")
+                subtitle_file = target_candidates[0]
+                subtitle_lang = target_language
+                task_logger.info(f"检测到目标语言字幕，直接烧录，无需翻译: {os.path.basename(subtitle_file)}")
 
                 if should_embed_subtitle and _embed_guard(subtitle_file, asr_artifact=asr_generated) and _ensure_asr_qc(subtitle_file):
                     embedded_video_path = self._embed_subtitle_in_video(
@@ -3873,7 +3902,7 @@ class TaskProcessor:
                             subtitle_path_original=subtitle_file,
                             subtitle_path_translated=None,
                             subtitle_language_detected=subtitle_lang,
-                            subtitle_warning_message=None,
+                            subtitle_warning_message=subtitle_reuse_warning,
                         )
                         task_logger.info("中文字幕烧录完成")
                         return True
@@ -3909,9 +3938,9 @@ class TaskProcessor:
                     task_logger.info("已检测到中文字幕，但未开启烧录，跳过翻译")
                     return True
             
-            if not translation_enabled:
+            if not translation_enabled and not merged_subtitle_path:
                 # 只烧录模式：不创建翻译器，直接使用最合适的已有/ASR字幕。
-                subtitle_file = zh_candidates[0] if zh_candidates else (en_candidates[0] if en_candidates else subtitle_files[0])
+                subtitle_file = target_candidates[0] if target_candidates else (en_candidates[0] if en_candidates else subtitle_files[0])
                 subtitle_lang = self._detect_subtitle_language(subtitle_file)
                 task_logger.info(f"字幕翻译未启用，直接使用原字幕进行烧录: {os.path.basename(subtitle_file)}")
 
@@ -3926,7 +3955,7 @@ class TaskProcessor:
                             subtitle_path_original=subtitle_file,
                             subtitle_path_translated=None,
                             subtitle_language_detected=subtitle_lang,
-                            subtitle_warning_message=None,
+                            subtitle_warning_message=subtitle_reuse_warning,
                         )
                         task_logger.info("原字幕烧录完成")
                         return True
@@ -3963,7 +3992,7 @@ class TaskProcessor:
             
             # 双语使用选定源语言，其余保持原有的英文优先回退。
             subtitle_file = (
-                bilingual_source_candidates[0] if use_bilingual_source
+                bilingual_source_candidates[0] if bilingual_source_candidates
                 else (en_candidates[0] if en_candidates else subtitle_files[0])
             )
             task_logger.info(f"找到字幕文件: {os.path.basename(subtitle_file)}")
@@ -3974,8 +4003,8 @@ class TaskProcessor:
 
             # 创建翻译器（此时需要翻译为中文）
             from modules.subtitle_translator import create_translator_from_config
-            translator = create_translator_from_config(self.config, task_id)
-            if not translator:
+            translator = None if merged_subtitle_path else create_translator_from_config(self.config, task_id)
+            if not merged_subtitle_path and not translator:
                 task_logger.error("无法创建字幕翻译器，请检查API配置")
                 update_task(
                     task_id,
@@ -4005,7 +4034,7 @@ class TaskProcessor:
             
             # 执行翻译
             cancel_event = get_task_cancel_event(task_id)
-            success = translator.translate_file(
+            success = bool(merged_subtitle_path) or translator.translate_file(
                 subtitle_file, 
                 translated_subtitle_path,
                 progress_callback=progress_callback,
@@ -4038,7 +4067,7 @@ class TaskProcessor:
                             subtitle_path_original=subtitle_file,
                             subtitle_path_translated=translated_subtitle_path,
                             subtitle_language_detected=subtitle_lang,
-                            subtitle_warning_message=None,
+                            subtitle_warning_message=subtitle_reuse_warning,
                         )
                     else:
                         task_logger.warning("字幕嵌入失败，保留原视频和字幕文件")
@@ -8934,6 +8963,15 @@ class TaskProcessor:
             )
             if subtitle_path_original and not subtitle_language:
                 subtitle_language = self._detect_subtitle_language(subtitle_path_original)
+
+            if (subtitle_path_original and not subtitle_path_translated
+                    and _as_bool(self.config.get('BILINGUAL_SUBTITLES', True))
+                    and not _is_asr_subtitle_artifact(task_id, subtitle_path_original)):
+                # Fresh downloaded tracks must use the same selection/merge policy,
+                # including when translation is off. Keep existing artifact gates above.
+                self._translate_subtitle(task_id, task_logger,
+                                         embed_in_video_override=should_embed_subtitle)
+                return get_task(task_id)
 
             reusable_updates = {}
             if subtitle_path_original and task.get('subtitle_path_original') != subtitle_path_original:

@@ -81,7 +81,7 @@ jobs:
           # Directed isolation only: do not use run_offline.py as a full-suite sandbox.
           python -c "import shutil; assert shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg must be discoverable; no skipped smoke test'"
           if ($LASTEXITCODE -ne 0) { throw 'FFmpeg PATH preflight failed' }
-          python tests/run_offline.py tests/test_bilingual_metadata.py tests/test_bilingual_output.py tests/test_bilingual_selection.py tests/test_bilingual_smoke.py -q
+          python tests/run_offline.py tests/test_bilingual_metadata.py tests/test_bilingual_output.py tests/test_bilingual_selection.py tests/test_bilingual_smoke.py tests/test_existing_bilingual_merge.py tests/test_existing_bilingual_settings.py -q
           if ($LASTEXITCODE -ne 0) { throw 'Bilingual acceptance tests failed' }
 
       - name: Stage tracked build inputs only

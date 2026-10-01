@@ -10,7 +10,8 @@ from test_subtitle_translator_pairing import _make_translator, _PATCH_TARGET
 
 
 def run_task(tmp_path, *, bilingual=True, source_language='auto', languages=('zh', 'en'),
-             translation=True, qc_failed=False, real_embed=False):
+             translation=True, qc_failed=False, real_embed=False, strategy='retranslate',
+             target_language='zh', subtitles=None, prepare_upload=False):
     task_id = 'selection'
     taskdir = tmp_path / task_id
     taskdir.mkdir()
@@ -18,6 +19,8 @@ def run_task(tmp_path, *, bilingual=True, source_language='auto', languages=('zh
     for language in languages:
         (taskdir / f'video.{language}.srt').write_text(
             f'1\n00:00:00,200 --> 00:00:01,800\n{texts[language]}\n\n', encoding='utf-8')
+    for name, content in (subtitles or {}).items():
+        (taskdir / name).write_text(content, encoding='utf-8')
     video = taskdir / 'video.mp4'
     processor = tm.TaskProcessor.__new__(tm.TaskProcessor)
     processor.config = {
@@ -26,6 +29,9 @@ def run_task(tmp_path, *, bilingual=True, source_language='auto', languages=('zh
         'SUBTITLE_QC_ENABLED': True, 'VIDEO_ENCODER': 'cpu', 'VIDEO_CPU_PRESET': 'ultrafast',
         'SUBTITLE_FONT_NAME': 'DejaVu Sans', 'FFMPEG_AUTO_DOWNLOAD': False,
     }
+    if strategy is not None:
+        processor.config['SUBTITLE_EXISTING_TARGET_STRATEGY'] = strategy
+    processor.config['SUBTITLE_TARGET_LANGUAGE'] = target_language
     task = {'id': task_id, 'video_path_local': str(video), 'subtitle_qc_failed': int(qc_failed),
             'subtitle_qc_reason': 'rejected' if qc_failed else None}
     translator = _make_translator(bilingual=tm._as_bool(bilingual), source_language=source_language)
@@ -42,8 +48,16 @@ def run_task(tmp_path, *, bilingual=True, source_language='auto', languages=('zh
         values.pop('silent', None)
         task.update(values)
 
+    def capture_ass(*args, **kwargs):
+        result = actual_convert(*args, **kwargs)
+        if result:
+            task['test_ass_text'] = Path(args[1]).read_text(encoding='utf-8')
+        return result
+
+    actual_convert = processor._convert_srt_to_ass
     from contextlib import ExitStack
     with ExitStack() as stack:
+        stack.enter_context(patch.object(processor, '_convert_srt_to_ass', side_effect=capture_ass))
         if real_embed:
             import shutil
             import subprocess
@@ -57,9 +71,15 @@ def run_task(tmp_path, *, bilingual=True, source_language='auto', languages=('zh
         stack.enter_context(patch.object(tm, 'get_task', return_value=task))
         stack.enter_context(patch.object(tm, 'update_task', side_effect=update))
         stack.enter_context(patch.object(processor, '_embed_subtitle_in_video', side_effect=embed))
-        stack.enter_context(patch.object(st, 'create_translator_from_config', return_value=translator))
+        factory = stack.enter_context(patch.object(st, 'create_translator_from_config', return_value=translator))
         stack.enter_context(patch(_PATCH_TARGET, side_effect=translator.llm_requester.fake_create))
-        assert processor._translate_subtitle(task_id, logging.getLogger('selection'))
+        if prepare_upload:
+            if not real_embed:
+                video.write_bytes(b'offline')
+            assert processor._prepare_subtitle_for_upload(task_id, logging.getLogger('selection'))
+        else:
+            assert processor._translate_subtitle(task_id, logging.getLogger('selection'))
+    task['test_translator_created'] = factory.call_count
     return task, burned, translator.llm_requester.sent_batches
 
 
