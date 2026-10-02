@@ -1,0 +1,15 @@
+Roboto Medium — unmodified official static hinted TTF
+
+Source repository: https://github.com/googlefonts/roboto-2
+(The former https://github.com/googlefonts/roboto repository redirects here.)
+Pinned revision: 38062f4b4a0be4346d07a928408da21602545e9e
+Font: https://raw.githubusercontent.com/googlefonts/roboto-2/38062f4b4a0be4346d07a928408da21602545e9e/src/hinted/Roboto-Medium.ttf
+License: https://raw.githubusercontent.com/googlefonts/roboto-2/38062f4b4a0be4346d07a928408da21602545e9e/LICENSE
+Bundled license: Roboto-LICENSE.txt (Apache License 2.0)
+Font SHA256: 2879a5ecb7fbfa13a7fc3e2cdd7fecbf73aa45e91b541dfdfa2c442eed0aac21
+License SHA256: c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4
+
+Downloaded only the font and license. No modification, instancing, conversion,
+or derived font naming is involved. The actual static upstream asset uses
+Apache-2.0, not the OFL of newer variable Roboto distributions. Copyright and
+attribution metadata embedded in the font are retained unchanged.

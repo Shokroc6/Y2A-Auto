@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   build-windows:
+    if: github.repository == 'fqscfqj/Y2A-Auto'
     runs-on: windows-latest
     permissions:
       contents: write

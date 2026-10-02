@@ -11,7 +11,7 @@ class BilingualSettingsTests(unittest.TestCase):
         template = (Path(__file__).resolve().parents[1] / 'templates/settings.html').read_text()
         self.assertIn('双语字幕（原文在上、译文在下）', template)
         self.assertIn('英语源、中文目标时，英文在上、中文在下', template)
-        self.assertIn('双语标题（中文 / 原文）', template)
+        self.assertIn('双语标题（中文 | 原文）', template)
         self.assertIn('双语简介（中文在前）', template)
 
     def test_switches_default_off_and_are_saved(self):
@@ -86,7 +86,7 @@ class BilingualTaskTests(unittest.TestCase):
             for _ in range(2):
                 self.assertTrue(processor._translate_content('offline', logging.getLogger('offline')))
                 values = update.call_args.kwargs
-                self.assertEqual(values['video_title_translated'], '中文标题 / Original title')
+                self.assertEqual(values['video_title_translated'], '中文标题 | Original title')
                 self.assertEqual(values['description_translated'], '中文简介\n\nOriginal description')
                 task.update(values)
             processor.config['BILINGUAL_TITLE_ENABLED'] = False
@@ -95,8 +95,7 @@ class BilingualTaskTests(unittest.TestCase):
             processor._translate_content('offline', logging.getLogger('offline'))
             values = update.call_args.kwargs
             self.assertEqual(values['video_title_translated'], '中文标题')
-            self.assertLessEqual(len(values['description_translated']), tm._get_effective_metadata_limits('acfun')['description_limit'])
-            self.assertIn('\n\nE', values['description_translated'])
+            self.assertEqual(values['description_translated'], '中' * 3000 + '\n\n' + 'E' * 3000)
 
     def test_disabled_translation_keeps_monolingual_without_client(self):
         with tempfile.TemporaryDirectory() as tmp:

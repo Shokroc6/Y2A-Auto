@@ -3470,16 +3470,20 @@ class TaskProcessor:
 
         if translated.get('success'):
             for field, original, switch, limit_key, separator in (
-                ('video_title_translated', 'video_title_original', 'BILINGUAL_TITLE_ENABLED', 'title_limit', ' / '),
+                ('video_title_translated', 'video_title_original', 'BILINGUAL_TITLE_ENABLED', 'title_limit', ' | '),
                 ('description_translated', 'description_original', 'BILINGUAL_DESCRIPTION_ENABLED', 'description_limit', '\n\n'),
             ):
-                target = str(updates.get(field) or '').strip()
-                source = str(task.get(original) or '').strip()
+                target = str(updates.get(field) or '')
+                source = str(task.get(original) or '')
+                if field == 'video_title_translated':
+                    target, source = target.strip(), source.strip()
                 if target and source and target != source and _as_bool(self.config.get(switch, False)):
-                    # Reserve space for both languages; recompute from originals on retry.
-                    budget = effective_limits[limit_key] - len(separator)
-                    target_size = min(len(target), max(budget // 2, budget - len(source)))
-                    updates[field] = target[:target_size] + separator + source[:budget - target_size]
+                    if field == 'description_translated':
+                        updates[field] = target + separator + source
+                    else:
+                        budget = effective_limits[limit_key] - len(separator)
+                        target_size = min(len(target), max(budget // 2, budget - len(source)))
+                        updates[field] = target[:target_size] + separator + source[:budget - target_size]
             if updates:
                 updates['error_message'] = None
                 updates['error_category'] = None
@@ -6850,10 +6854,10 @@ class TaskProcessor:
     def _resolve_subtitle_font(self, task_logger, temp_fonts_dir):
         config = getattr(self, 'config', {}) or {}
         configured_font_name = str(
-            config.get('SUBTITLE_FONT_NAME') or 'NotoSansCJKsc-Regular.otf'
+            config.get('SUBTITLE_FONT_NAME') or 'Roboto-Medium.ttf'
         ).strip()
         if not configured_font_name:
-            configured_font_name = 'NotoSansCJKsc-Regular.otf'
+            configured_font_name = 'Roboto-Medium.ttf'
 
         resolved_font = {
             'configured_font_name': configured_font_name,
@@ -6896,6 +6900,10 @@ class TaskProcessor:
         resolved_font['font_path'] = matched_font['font_path']
         resolved_font['matched_font_name'] = matched_font['font_name']
         resolved_font['font_family'] = matched_font['font_family']
+        # Use the static face's full name so libass does not resolve plain
+        # "Roboto" to a different weight; other user selections stay unchanged.
+        if os.path.basename(matched_font['font_path']) == 'Roboto-Medium.ttf':
+            resolved_font['font_family'] = matched_font['font_name']
         try:
             temp_font_path = os.path.join(temp_fonts_dir, os.path.basename(matched_font['font_path']))
             shutil.copy2(matched_font['font_path'], temp_font_path)
@@ -6907,6 +6915,16 @@ class TaskProcessor:
         except Exception as exc:
             if task_logger:
                 task_logger.warning(f"复制内置字幕字体失败: {exc}")
+
+        if os.path.basename(matched_font['font_path']) == 'Roboto-Medium.ttf':
+            fallback_path = os.path.join(get_app_subdir('fonts'), 'NotoSansCJKsc-Regular.otf')
+            try:
+                shutil.copy2(fallback_path, os.path.join(temp_fonts_dir, os.path.basename(fallback_path)))
+                if task_logger:
+                    task_logger.debug('已加载内置中文字幕 fallback: NotoSansCJKsc-Regular.otf')
+            except Exception as exc:
+                if task_logger:
+                    task_logger.warning(f'复制内置中文字幕 fallback 失败: {exc}')
 
         return resolved_font
 
@@ -7030,6 +7048,14 @@ class TaskProcessor:
                 wrap_meta = {}
             if not text:
                 continue
+            if font_name == 'Roboto Medium':
+                # Pin CJK runs to the bundled face: system fallback ordering
+                # differs by OS even when Noto is loaded in fontsdir.
+                text = re.sub(
+                    r'[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]+',
+                    lambda match: '{\\fnNoto Sans CJK SC}' + match.group(0) + '{\\fnRoboto Medium}',
+                    text,
+                )
             if wrap_meta.get('forced_wrap'):
                 forced_wrap_count += 1
             if wrap_meta.get('font_override'):
@@ -9398,12 +9424,14 @@ class TaskProcessor:
         original_url = ''
         original_uploader = ''
         original_upload_date = ''
+        original_title = ''
         
         if metadata_path and os.path.exists(metadata_path):
             try:
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                     original_url = metadata.get('webpage_url', '')
+                    original_title = metadata.get('title', '')
                     original_uploader = metadata.get('uploader', '')
                     original_upload_date = metadata.get('upload_date', '')
             except Exception as e:
@@ -9524,6 +9552,7 @@ class TaskProcessor:
                 tags=tags,
                 partition_id=partition_id,
                 original_url=original_url,
+                original_title=original_title,
                 original_uploader=original_uploader,
                 original_upload_date=original_upload_date,
                 upload_append_repost_notice=bool(self.config.get('UPLOAD_APPEND_REPOST_NOTICE', True)),
@@ -9637,24 +9666,27 @@ class TaskProcessor:
         original_url = task.get('youtube_url', '') if task else ''
         original_uploader = ''
         original_upload_date = ''
+        original_title = ''
 
         if metadata_path and os.path.exists(metadata_path):
             try:
                 with open(metadata_path, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                     original_url = metadata.get('webpage_url', original_url)
+                    original_title = metadata.get('title', '')
                     original_uploader = metadata.get('uploader', '')
                     original_upload_date = metadata.get('upload_date', '')
             except Exception as e:
                 task_logger.error(f"读取视频元数据失败: {str(e)}")
 
-        # bilibili 转载页会单独展示 source，这里只保留说明文案和正文，避免 URL 重复出现。
+        # 两平台使用同一声明格式，正文及重复 URL 保持原样。
         try:
             from modules.bilibili_uploader import format_bilibili_description
 
             description = format_bilibili_description(
                 base_desc=description,
                 original_url=original_url,
+                original_title=original_title,
                 original_uploader=original_uploader,
                 original_upload_date=original_upload_date,
                 append_repost_notice=bool(self.config.get('UPLOAD_APPEND_REPOST_NOTICE', True)),

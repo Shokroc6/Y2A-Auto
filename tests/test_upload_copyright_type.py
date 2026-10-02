@@ -60,7 +60,7 @@ class AcfunUploadTypeTests(_FileCase):
         call = self._upload()
         self.assertEqual(call['creation_type'], 1)
         self.assertEqual(call['original_url'], 'https://www.youtube.com/watch?v=x')
-        self.assertIn('转载', call['desc'])
+        self.assertEqual(call['desc'], '原作者：Someone\n发布日期：2026-01-01\n视频链接：https://www.youtube.com/watch?v=x\n\ndesc')
 
     def test_original_drops_source_and_notice(self):
         call = self._upload(copyright_type='original')

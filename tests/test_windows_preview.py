@@ -35,6 +35,14 @@ class WindowsPreviewTests(unittest.TestCase):
         self.assertEqual(upload[0]['with']['retention-days'], 14)
         self.assertEqual(upload[0]['with']['if-no-files-found'], 'error')
 
+    def test_new_features_run_on_windows_and_inherited_release_is_upstream_only(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/windows-preview.yml').read_text())
+        commands = '\n'.join(step.get('run', '') for step in workflow['jobs']['build-windows']['steps'])
+        for module in ('test_description_preservation', 'test_bundled_subtitle_fonts', 'test_platform_metadata_limits'):
+            self.assertIn(module, commands)
+        release = yaml.safe_load((ROOT / '.github/workflows/windows-release.yml').read_text())
+        self.assertEqual(release['jobs']['build-windows']['if'], "github.repository == 'fqscfqj/Y2A-Auto'")
+
     def test_publish_workflows_do_not_trigger_on_main_push(self):
         workflows = ROOT / '.github/workflows'
         docker = yaml.safe_load((workflows / 'docker-publish.yml').read_text(encoding='utf-8'))

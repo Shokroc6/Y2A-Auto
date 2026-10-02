@@ -22,7 +22,7 @@ def _load_acfun_helpers():
                     selected.append(node)
 
     isolated = ast.Module(body=selected, type_ignores=[])
-    namespace = {"re": re}
+    namespace = {"re": re, "__name__": "modules.offline_helpers", "__package__": "modules"}
     exec(compile(isolated, str(module_path), "exec"), namespace)
     return namespace
 
@@ -50,7 +50,7 @@ def _load_bilibili_helpers():
                     selected.append(node)
 
     isolated = ast.Module(body=selected, type_ignores=[])
-    namespace = {"re": re}
+    namespace = {"re": re, "__name__": "modules.offline_helpers", "__package__": "modules"}
     exec(compile(isolated, str(module_path), "exec"), namespace)
     return namespace
 
@@ -101,8 +101,8 @@ class PlatformMetadataLimitTests(unittest.TestCase):
         self.assertEqual(ns["ACFUN_DESCRIPTION_LIMIT"], 1000)
 
         result = ns["build_upload_description"]("a" * 1200)
-        self.assertEqual(len(result), 1000)
-        self.assertTrue(result.endswith("..."))
+        # Formatting is lossless; uploader tests enforce rejection before network.
+        self.assertEqual(result, "a" * 1200)
 
     def test_bilibili_limits_and_description_budget(self):
         ns = _load_bilibili_helpers()
@@ -111,12 +111,10 @@ class PlatformMetadataLimitTests(unittest.TestCase):
         self.assertEqual(ns["BILIBILI_DESCRIPTION_LIMIT"], 2000)
 
         result = ns["format_bilibili_description"]("b" * 2300)
-        self.assertEqual(len(result), 2000)
-        self.assertTrue(result.endswith("..."))
+        self.assertEqual(result, "b" * 2300)
 
         shared_result = ns["format_bilibili_description"]("c" * 1300, max_len=1000)
-        self.assertEqual(len(shared_result), 1000)
-        self.assertTrue(shared_result.endswith("..."))
+        self.assertEqual(shared_result, "c" * 1300)
 
     def test_ai_output_limits_accept_bilibili_sized_metadata(self):
         apply_output_limits = _load_ai_output_limits()

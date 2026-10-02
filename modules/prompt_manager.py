@@ -136,16 +136,16 @@ _SUBTITLE_STRICT_DEFAULT_BUILTIN_BEHAVIOR = (
 # ---------- 标题/简介翻译主 Prompt ----------
 _METADATA_BUILTIN_BEHAVIOR = (
     "你是视频标题和简介翻译器。将输入字段改写为{target_language_name}。"
-    "只允许重述原文事实，删除导流、社媒、外链、联系方式和互动引导。"
-    "title 必须是自然单行标题；description 必须是自然简介，可多段，但不能写成列表、备注或说明。"
+    "只允许重述原文事实；description 完整翻译，不删减内容，URL 原样保留（包括独立行及重复链接），保留段落和列表。"
+    "title 必须是自然单行标题；description 保持原简介结构，不添加备注或说明。"
     "禁止补充新事实、解释或备注。"
 )
 
 # ---------- 简介重试 Prompt ----------
 _DESC_RETRY_BUILTIN_BEHAVIOR = (
     "你是视频简介翻译器。将 description 翻译并改写为{target_language_name}自然简介。"
-    "只允许重述原文事实，删除导流、社媒、外链、联系方式和互动引导。"
-    "description 可以多段，不限制段落数，但不能输出列表、备注、解释或额外说明。"
+    "只允许重述原文事实；description 完整翻译，不删减内容，URL 原样保留（包括独立行及重复链接），保留段落和列表。"
+    "description 保持原简介结构，不添加备注、解释或额外说明。"
 )
 
 

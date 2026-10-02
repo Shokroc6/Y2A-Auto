@@ -64,34 +64,13 @@ def compact_text(text: str, max_len: int) -> str:
         return text[:max_len]
     return text[: max_len - 3] + "..."
 
-def build_upload_description(
-    base_desc: str,
-    original_url: str = "",
-    original_uploader: str = "",
-    original_upload_date: str = "",
-    append_repost_notice: bool = True,
-    max_len: int = ACFUN_DESCRIPTION_LIMIT
-) -> str:
-    """
-    构建最终投稿简介：
-    - 转载且 append_repost_notice=True: 转载声明 + 摘要
-    - 其他情况: 仅正文摘要
-    """
-    is_repost = bool(original_url or original_uploader or original_upload_date)
-    if not is_repost or not append_repost_notice:
-        return compact_text(base_desc, max_len)
-
-    repost_notice = "本视频转载自YouTube"
-    if original_upload_date:
-        repost_notice += f"，原始上传时间：{original_upload_date}"
-    if original_uploader:
-        repost_notice += f"，UP主：{original_uploader}"
-    repost_notice = compact_text(repost_notice, max_len)
-
-    summary = compact_text(base_desc, max(0, max_len - len(repost_notice) - 2))
-    if not summary:
-        return repost_notice
-    return f"{repost_notice}\n\n{summary}"
+def build_upload_description(base_desc: str, original_url: str = "", original_uploader: str = "",
+    original_upload_date: str = "", append_repost_notice: bool = True,
+    max_len: int = ACFUN_DESCRIPTION_LIMIT, copyright_type: str = "repost",
+    original_title: str = "") -> str:
+    from .repost_description import build_repost_description
+    return build_repost_description(base_desc, original_url, original_uploader,
+        original_upload_date, original_title, append_repost_notice, max_len, copyright_type)
 
 
 class AcfunUploader:
@@ -810,7 +789,7 @@ class AcfunUploader:
                      partition_id, original_url=None, original_uploader=None, 
                      original_upload_date=None, upload_append_repost_notice=True,
                      task_id=None, cover_mode='crop',
-                     cancel_event=None, copyright_type='repost'):
+                     cancel_event=None, copyright_type='repost', original_title=''):
         """
         上传视频到AcFun
         
@@ -837,6 +816,12 @@ class AcfunUploader:
         self.log(f"开始上传视频: {video_file_path}")
         
         try:
+            full_description = build_upload_description(
+                description, original_url or '', original_uploader or '',
+                original_upload_date or '', bool(upload_append_repost_notice),
+                copyright_type=copyright_type, original_title=original_title)
+            if len(full_description) > ACFUN_DESCRIPTION_LIMIT:
+                return False, f"AcFun简介含转载声明共{len(full_description)}字符，超过{ACFUN_DESCRIPTION_LIMIT}字符限制，请编辑简介后重试"
             # 尝试登录
             if not self.login():
                 return False, "AcFun登录失败，请检查Cookies文件是否有效"
@@ -871,15 +856,6 @@ class AcfunUploader:
             if str(copyright_type or '').strip().lower() == 'original':
                 # 用户选择自制：不提交转载来源，也不追加转载声明
                 original_url = original_uploader = original_upload_date = None
-
-            full_description = build_upload_description(
-                base_desc=description,
-                original_url=original_url or "",
-                original_uploader=original_uploader or "",
-                original_upload_date=original_upload_date or "",
-                append_repost_notice=bool(upload_append_repost_notice),
-                max_len=max_desc
-            )
 
             # 判断视频创作类型
             creation_type = 1 if original_url else 3  # 1:转载, 3:原创

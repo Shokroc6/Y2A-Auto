@@ -253,7 +253,7 @@ AI 文本功能同时兼容 OpenAI Chat Completions 与 Responses API。`OPENAI_
 - `YOUTUBE_AUTO_GENERATED_SUBTITLES_ENABLED`：下载 YouTube 自动生成字幕，默认 `false`
 - `SUBTITLE_SOURCE_LANGUAGE`：源语言，默认 `auto`
 - `SUBTITLE_TARGET_LANGUAGE`：目标语言，默认 `zh`
-- `SUBTITLE_FONT_NAME`：烧录字幕字体名，默认 `NotoSansCJKsc-Regular.otf`
+- `SUBTITLE_FONT_NAME`：烧录字幕字体名，新配置默认 `Roboto-Medium.ttf`（中文使用随包 Noto）；已有字体选择不变，粗体默认仍为 `true`。字体许可与来源位于 `fonts/`。
 - `SUBTITLE_BATCH_SIZE`：翻译批次大小
 - `SUBTITLE_MAX_RETRIES` / `SUBTITLE_RETRY_DELAY`：翻译重试策略
 - `SUBTITLE_EMBED_IN_VIDEO`：是否将字幕嵌入视频

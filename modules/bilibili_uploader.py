@@ -105,37 +105,13 @@ def _remove_redundant_original_url(text: str, original_url: str) -> str:
     return _normalize_multiline_text("\n".join(cleaned_lines))
 
 
-def format_bilibili_description(
-    base_desc: str,
-    original_url: str = "",
-    original_uploader: str = "",
-    original_upload_date: str = "",
-    append_repost_notice: bool = True,
-    max_len: int = BILIBILI_DESCRIPTION_LIMIT,
-    copyright_type: str = "repost",
-) -> str:
-    summary = _remove_redundant_original_url(base_desc, original_url)
-    is_repost = str(copyright_type or "").strip().lower() != "original" and bool(
-        original_url or original_uploader or original_upload_date
-    )
-    if not is_repost or not append_repost_notice:
-        return _truncate_multiline_text(summary, max_len)
-
-    notice_parts = ["本视频转载自YouTube"]
-    if original_upload_date:
-        notice_parts.append(f"原始上传时间：{original_upload_date}")
-    if original_uploader:
-        notice_parts.append(f"UP主：{original_uploader}")
-    repost_notice = "，".join(notice_parts)
-
-    if not summary:
-        return _truncate_multiline_text(repost_notice, max_len)
-
-    remain_len = max(0, max_len - len(repost_notice) - 2)
-    summary = _truncate_multiline_text(summary, remain_len)
-    if not summary:
-        return _truncate_multiline_text(repost_notice, max_len)
-    return f"{repost_notice}\n\n{summary}"
+def format_bilibili_description(base_desc: str, original_url: str = "", original_uploader: str = "",
+    original_upload_date: str = "", append_repost_notice: bool = True,
+    max_len: int = BILIBILI_DESCRIPTION_LIMIT, copyright_type: str = "repost",
+    original_title: str = "") -> str:
+    from .repost_description import build_repost_description
+    return build_repost_description(base_desc, original_url, original_uploader,
+        original_upload_date, original_title, append_repost_notice, max_len, copyright_type)
 
 
 def _extract_response_code_from_exception(exc: Exception) -> Optional[int]:
@@ -253,6 +229,10 @@ class BilibiliUploader:
         self.logger = setup_task_logger(task_id or "unknown")
 
         try:
+            safe_desc = str(description or '')
+            safe_desc_limit = min(BILIBILI_DESCRIPTION_LIMIT, int(description_limit or BILIBILI_DESCRIPTION_LIMIT))
+            if len(safe_desc) > safe_desc_limit:
+                return False, f"bilibili简介含转载声明共{len(safe_desc)}字符，超过{safe_desc_limit}字符限制，请编辑简介后重试"
             configure_bilibili_runtime()
 
             if not os.path.exists(video_file_path):
@@ -266,12 +246,7 @@ class BilibiliUploader:
                 return False, f"Bilibili登录态无效: {credential_msg}。请在设置页重新扫码登录后重试上传。"
 
             safe_title_limit = int(title_limit or BILIBILI_TITLE_LIMIT)
-            safe_desc_limit = int(description_limit or BILIBILI_DESCRIPTION_LIMIT)
             safe_title = _compact_text(title or "", safe_title_limit)
-            safe_desc = _truncate_multiline_text(
-                _remove_redundant_original_url(description or "", youtube_url or ""),
-                safe_desc_limit,
-            )
             safe_tags = [str(t).strip()[:20] for t in (tags or []) if str(t).strip()]
             safe_tags = safe_tags[:12]
 

@@ -715,6 +715,10 @@ def _collect_invalid_metadata_fields(
             if output_text:
                 invalid_fields[field_name] = ["unexpected_output"]
             continue
+        if field_name == 'description':
+            if not output_text.strip():
+                invalid_fields[field_name] = ['empty_output']
+            continue
         is_valid, reasons = _validate_output(
             source_clean,
             output_text,
@@ -846,14 +850,8 @@ def _request_translated_metadata_fields(
             title_limit=title_limit,
             description_limit=description_limit,
         ),
-        "description": _sanitize_metadata_field(
-            raw_description,
-            "description",
-            logger=logger,
-            max_blocks=description_max_blocks,
-            title_limit=title_limit,
-            description_limit=description_limit,
-        ),
+        # Preserve description text/URLs; hard limits are checked on the final upload.
+        "description": safe_str(raw_description),
     }
     if description_log_phase and "description" in payload:
         _log_description_field_state(
@@ -1032,25 +1030,23 @@ def translate_video_metadata(
 
     cleaned_title = _pre_clean(raw_title, content_type="title") if translate_title and raw_title else ''
     cleaned_description = (
-        _pre_clean(raw_description, content_type="description", max_blocks=None)
+        raw_description
         if translate_description and raw_description
         else ''
     )
     if cleaned_title and not _has_meaningful_content(cleaned_title, content_type="title"):
         cleaned_title = ''
-    if cleaned_description and not _has_meaningful_content(cleaned_description, content_type="description"):
-        cleaned_description = ''
 
     if translate_description and raw_description and not cleaned_description:
         logger.info("简介预清洗后无有效内容，直接留空")
     elif cleaned_description:
         logger.info(
-            f"简介预清洗后长度: {len(cleaned_description)} 字符，段落数: {_count_description_blocks(cleaned_description)}"
+            f"简介原文长度: {len(cleaned_description)} 字符，段落数: {_count_description_blocks(cleaned_description)}"
         )
     if (translate_title and raw_title and cleaned_title != raw_title) or (
         translate_description and raw_description and cleaned_description != raw_description
     ):
-        logger.info("已在提示阶段前执行结构化预清洗（去导流/站外信息/列表化噪声）")
+        logger.info("已在提示阶段前执行标题预清洗；简介原样保留")
 
     requested_fields = []
     if translate_title and raw_title:

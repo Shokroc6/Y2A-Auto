@@ -158,9 +158,9 @@
                                                         <input type="checkbox" name="TRANSLATE_DESCRIPTION" {% if config.TRANSLATE_DESCRIPTION %}checked{% endif %}>
                                                         自动翻译描述
                                                     </label>
-                                                    <label class="checkbox-label"><input type="checkbox" name="BILINGUAL_TITLE_ENABLED" {% if config.get('BILINGUAL_TITLE_ENABLED', False) %}checked{% endif %}>双语标题（中文 / 原文）</label>
+                                                    <label class="checkbox-label"><input type="checkbox" name="BILINGUAL_TITLE_ENABLED" {% if config.get('BILINGUAL_TITLE_ENABLED', False) %}checked{% endif %}>双语标题（中文 | 原文）</label>
                                                     <label class="checkbox-label"><input type="checkbox" name="BILINGUAL_DESCRIPTION_ENABLED" {% if config.get('BILINGUAL_DESCRIPTION_ENABLED', False) %}checked{% endif %}>双语简介（中文在前）</label>
-                                                    <p class="help-text">分别依赖对应的自动翻译开关；不额外开启 AI。超出平台长度时保留两种语言并截短；转载设置不变。</p>
+                                                    <p class="help-text">分别依赖对应的自动翻译开关；不额外开启 AI。标题超限时保留两种语言并截短；简介完整保留，含转载声明超过 AcFun 1000 / bilibili 2000 字时停止上传，请编辑后重试。</p>
                                                     <label class="checkbox-label">
                                                         <input type="checkbox" name="GENERATE_TAGS" {% if config.GENERATE_TAGS %}checked{% endif %}>
                                                         自动生成标签
