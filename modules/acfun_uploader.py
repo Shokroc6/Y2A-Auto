@@ -810,7 +810,7 @@ class AcfunUploader:
                      partition_id, original_url=None, original_uploader=None, 
                      original_upload_date=None, upload_append_repost_notice=True,
                      task_id=None, cover_mode='crop',
-                     cancel_event=None):
+                     cancel_event=None, copyright_type='repost'):
         """
         上传视频到AcFun
         
@@ -867,6 +867,10 @@ class AcfunUploader:
             # 3. 网页端限制：简介 1000 字、粉丝动态 233 字
             max_desc = ACFUN_DESCRIPTION_LIMIT
             max_fans_only_desc = 233
+
+            if str(copyright_type or '').strip().lower() == 'original':
+                # 用户选择自制：不提交转载来源，也不追加转载声明
+                original_url = original_uploader = original_upload_date = None
 
             full_description = build_upload_description(
                 base_desc=description,

@@ -40,6 +40,7 @@ DEFAULT_CONFIG = {
     "BILINGUAL_TITLE_ENABLED": False,
     "BILINGUAL_DESCRIPTION_ENABLED": False,
     "UPLOAD_APPEND_REPOST_NOTICE": True,
+    "UPLOAD_COPYRIGHT_TYPE": "repost",  # 投稿类型：repost=转载（默认）| original=自制
     "DELETE_DOWNLOAD_FILES_AFTER_UPLOAD": False, # 上传全部成功后是否立即删除任务下载文件
     "GENERATE_TAGS": False,
     "YOUTUBE_UPLOADER_AS_FIRST_TAG": False,
@@ -281,6 +282,12 @@ DEFAULT_CONFIG = inject_speech_pipeline_defaults(DEFAULT_CONFIG)
 
 # Prompt 中心默认键（4 组翻译 Prompt 的 mode + text）
 DEFAULT_CONFIG.update(_get_prompt_default_entries())
+
+
+def normalize_upload_copyright_type(value):
+    """投稿类型仅允许 repost（转载）或 original（自制），其他值回退为转载。"""
+    normalized = str(value or 'repost').strip().lower()
+    return normalized if normalized in ('repost', 'original') else 'repost'
 
 
 def normalize_youtube_download_quality_mode(value):
@@ -543,6 +550,8 @@ def update_config(new_config):
             elif key == 'UPLOAD_TARGET_DEFAULT':
                 target = str(new_config[key]).strip().lower()
                 current_config[key] = target if target in ('acfun', 'bilibili', 'both') else 'acfun'
+            elif key == 'UPLOAD_COPYRIGHT_TYPE':
+                current_config[key] = normalize_upload_copyright_type(new_config[key])
             elif key == 'YOUTUBE_DOWNLOAD_QUALITY_MODE':
                 current_config[key] = normalize_youtube_download_quality_mode(new_config[key])
             elif key == 'YOUTUBE_DOWNLOAD_MAX_HEIGHT':

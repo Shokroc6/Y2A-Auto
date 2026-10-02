@@ -9529,6 +9529,7 @@ class TaskProcessor:
                 upload_append_repost_notice=bool(self.config.get('UPLOAD_APPEND_REPOST_NOTICE', True)),
                 task_id=task_id,
                 cover_mode=cover_mode,
+                copyright_type=self.config.get('UPLOAD_COPYRIGHT_TYPE', 'repost'),
                 cancel_event=cancel_event
             )
             
@@ -9658,6 +9659,7 @@ class TaskProcessor:
                 original_upload_date=original_upload_date,
                 append_repost_notice=bool(self.config.get('UPLOAD_APPEND_REPOST_NOTICE', True)),
                 max_len=effective_limits['description_limit'],
+                copyright_type=self.config.get('UPLOAD_COPYRIGHT_TYPE', 'repost'),
             )
         except Exception as e:
             task_logger.warning(f"构建bilibili投稿简介失败，回退原简介: {e}")
@@ -9800,6 +9802,7 @@ class TaskProcessor:
                 progress_callback=_on_progress,
                 title_limit=effective_limits['title_limit'],
                 description_limit=effective_limits['description_limit'],
+                copyright_type=self.config.get('UPLOAD_COPYRIGHT_TYPE', 'repost'),
             )
 
             if success:

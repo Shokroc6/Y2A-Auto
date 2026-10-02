@@ -209,6 +209,17 @@
                                                             </select>
                                                         </div>
                                                     </div>
+                                                    <div class="col-md-6">
+                                                        <div class="form-group">
+                                                            <label for="upload-copyright-type" class="form-label">投稿类型</label>
+                                                            {% set copyright_type = (config.get('UPLOAD_COPYRIGHT_TYPE', 'repost'))|lower %}
+                                                            <select name="UPLOAD_COPYRIGHT_TYPE" id="upload-copyright-type" class="form-select">
+                                                                <option value="repost" {% if copyright_type != 'original' %}selected{% endif %}>转载（默认，附 YouTube 来源）</option>
+                                                                <option value="original" {% if copyright_type == 'original' %}selected{% endif %}>自制</option>
+                                                            </select>
+                                                            <p class="help-text mt-1 mb-0">AcFun 与 bilibili 共用。自制不填来源、不加转载声明；搬运他人视频请保持转载，以免违反平台规则。</p>
+                                                        </div>
+                                                    </div>
                                                     <div class="col-12">
                                                         <div class="settings-inline-options">
                                                             <label class="checkbox-label">

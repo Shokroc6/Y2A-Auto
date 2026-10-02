@@ -112,9 +112,12 @@ def format_bilibili_description(
     original_upload_date: str = "",
     append_repost_notice: bool = True,
     max_len: int = BILIBILI_DESCRIPTION_LIMIT,
+    copyright_type: str = "repost",
 ) -> str:
     summary = _remove_redundant_original_url(base_desc, original_url)
-    is_repost = bool(original_url or original_uploader or original_upload_date)
+    is_repost = str(copyright_type or "").strip().lower() != "original" and bool(
+        original_url or original_uploader or original_upload_date
+    )
     if not is_repost or not append_repost_notice:
         return _truncate_multiline_text(summary, max_len)
 
@@ -244,6 +247,7 @@ class BilibiliUploader:
         progress_callback: Optional[Callable[[str], None]] = None,
         title_limit: int = BILIBILI_TITLE_LIMIT,
         description_limit: int = BILIBILI_DESCRIPTION_LIMIT,
+        copyright_type: str = "repost",
     ) -> Tuple[bool, Union[dict, str]]:
         self.task_id = task_id
         self.logger = setup_task_logger(task_id or "unknown")
@@ -277,9 +281,9 @@ class BilibiliUploader:
                 return False, "分区ID为空，无法上传到bilibili"
 
             tid = int(partition_id)
-            # 业务要求：bilibili强制按非自制（转载）投稿
-            is_original = False
-            source = youtube_url or None
+            # 投稿类型由设置决定，默认转载；自制时不填转载来源
+            is_original = str(copyright_type or "").strip().lower() == "original"
+            source = None if is_original else (youtube_url or None)
 
             meta = video_uploader.VideoMeta(
                 tid=tid,
