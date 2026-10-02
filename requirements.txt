@@ -34,3 +34,5 @@ cryptography>=50.0.0,<51.0
 pycryptodomex~=3.23.0
 qrcode~=8.2.0
 yarl~=1.22.0
+# YAML structural guards run in both Linux CI and the Windows artifact build.
+PyYAML>=6.0,<7.0
