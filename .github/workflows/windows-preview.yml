@@ -75,9 +75,8 @@ jobs:
             throw "ffprobe.exe validation failed."
           }
 
-          $readme = Get-ChildItem -Path $extractDir -Recurse -File -Filter 'README*' | Select-Object -First 1
-          if (-not $readme) { throw 'FFmpeg README missing' }
-          Copy-Item $readme.FullName (Join-Path $ffmpegDir 'FFMPEG_README.txt')
+          # BtbN binary archives contain the license but no upstream README.
+          Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/FFmpeg/FFmpeg/master/README.md' -OutFile (Join-Path $ffmpegDir 'FFMPEG_README.txt')
           Add-Content -Path $env:GITHUB_PATH -Value $ffmpegDir
 
       - uses: actions/setup-python@v6
