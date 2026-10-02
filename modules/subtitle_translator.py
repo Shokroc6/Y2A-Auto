@@ -425,6 +425,7 @@ class SubtitleItem:
 @dataclass
 class TranslationConfig:
     """翻译配置"""
+    bilingual: bool = False
     source_language: str = "auto"
     target_language: str = "zh"
     api_provider: str = "openai"  # 仅支持openai
@@ -524,7 +525,7 @@ class SubtitleReader:
         return merged_text
     
     @staticmethod
-    def read_srt(file_path: str) -> List[SubtitleItem]:
+    def read_srt(file_path: str, preserve_lines: bool = False) -> List[SubtitleItem]:
         """读取SRT字幕文件（兼容更宽松的SRT变体与ASR输出）"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -539,13 +540,13 @@ class SubtitleReader:
 
             # 先尝试严格格式：带编号的块
             # 小时位放宽为1-2位，兼容 0:00:01,920 与 00:00:01,920
-            pattern_strict = r'(\d+)\n(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\n(.*?)(?=\n\d+\n|\Z)'
+            pattern_strict = r'(\d+)\n(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\n(.*?)(?=\n\d+\n\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s*-->|\Z)'
             matches = re.findall(pattern_strict, content, re.DOTALL)
 
             blocks: List[SubtitleItem] = []
             if matches:
                 for index, start_time, end_time, text in matches:
-                    processed_text = SubtitleReader._preprocess_subtitle_text(text)
+                    processed_text = text.strip() if preserve_lines else SubtitleReader._preprocess_subtitle_text(text)
                     if processed_text:
                         # 统一时间为SRT逗号毫秒
                         st = start_time.replace('.', ',')
@@ -561,7 +562,7 @@ class SubtitleReader:
                 pattern_loose = r'(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[,.]\d{3})\n(.*?)(?=\n\d{1,2}:\d{2}:\d{2}|\Z)'
                 loose_matches = re.findall(pattern_loose, content, re.DOTALL)
                 for i, (start_time, end_time, text) in enumerate(loose_matches, 1):
-                    processed_text = SubtitleReader._preprocess_subtitle_text(text)
+                    processed_text = text.strip() if preserve_lines else SubtitleReader._preprocess_subtitle_text(text)
                     if processed_text:
                         st = start_time.replace('.', ',')
                         et = end_time.replace('.', ',')
@@ -579,7 +580,7 @@ class SubtitleReader:
             return []
     
     @staticmethod
-    def read_vtt(file_path: str) -> List[SubtitleItem]:
+    def read_vtt(file_path: str, preserve_lines: bool = False) -> List[SubtitleItem]:
         """读取VTT字幕文件"""
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -599,8 +600,12 @@ class SubtitleReader:
             for i, match in enumerate(matches, 1):
                 start_time, end_time, text = match
                 
-                # 前处理字幕文本：将多行改为单行
-                processed_text = SubtitleReader._preprocess_subtitle_text(text)
+                # VTT 实体只解码一次，不把解码后的字面标签/花括号当作样式删除。
+                if preserve_lines:
+                    import html
+                    processed_text = html.unescape(text.strip())
+                else:
+                    processed_text = SubtitleReader._preprocess_subtitle_text(text)
                 
                 if processed_text:
                     items.append(SubtitleItem(
@@ -1397,9 +1402,9 @@ class SubtitleTranslator:
             # 检测文件格式并读取
             file_ext = Path(input_path).suffix.lower()
             if file_ext == '.srt':
-                items = self.reader.read_srt(input_path)
+                items = self.reader.read_srt(input_path, preserve_lines=True) if self.config.bilingual else self.reader.read_srt(input_path)
             elif file_ext == '.vtt':
-                items = self.reader.read_vtt(input_path)
+                items = self.reader.read_vtt(input_path, preserve_lines=True) if self.config.bilingual else self.reader.read_vtt(input_path)
             else:
                 self.logger.error(f"不支持的字幕格式: {file_ext}")
                 return False
@@ -1908,6 +1913,18 @@ class SubtitleTranslator:
         """写入翻译后的文件"""
         try:
             output_ext = Path(output_path).suffix.lower()
+            if self.config.bilingual:
+                # Pair within each source cue, never merge separately downloaded tracks.
+                paired = [SubtitleItem(item.index, item.start_time, item.end_time,
+                          item.source_text + ('\n' + item.translated_text if item.translated_text and item.translated_text != item.source_text else ''))
+                          for item in items]
+                if output_ext == '.srt':
+                    self.writer.write_srt(paired, output_path, translated=False)
+                elif output_ext == '.vtt':
+                    self.writer.write_vtt(paired, output_path, translated=False)
+                else:
+                    return False
+                return True
             if output_ext == '.srt':
                 self.writer.write_srt(items, output_path, translated=True)
             elif output_ext == '.vtt':
@@ -2007,6 +2024,7 @@ def create_translator_from_config(app_config: Dict, task_id: Optional[str] = Non
             logger.debug(f"读取 Prompt 中心配置失败，将回退 builtin: {exc}")
 
         translation_config = TranslationConfig(
+            bilingual=coerce_bool(app_config.get('SUBTITLE_BILINGUAL_ENABLED', False)),
             source_language=app_config.get('SUBTITLE_SOURCE_LANGUAGE', 'auto'),
             target_language=app_config.get('SUBTITLE_TARGET_LANGUAGE', 'zh'),
             api_provider=app_config.get('SUBTITLE_API_PROVIDER', 'openai'),

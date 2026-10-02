@@ -319,6 +319,19 @@ def _build_subtitle_download_args(
     if not include_subtitles:
         return ['--no-write-subs']
 
+    config = config or {}
+    if config.get('SUBTITLE_BILINGUAL_ENABLED') and config.get('SUBTITLE_TRANSLATION_ENABLED'):
+        source = str(config.get('SUBTITLE_SOURCE_LANGUAGE', 'auto') or 'auto')
+        if source == 'auto':
+            source = 'en'
+        # yt-dlp prefers a manual track over an automatic track of the SAME
+        # language key. Select one exact language, not all language variants.
+        args = ['--write-subs', '--sub-langs', source, '--convert-subs', 'srt']
+        if config.get('YOUTUBE_AUTO_GENERATED_SUBTITLES_ENABLED', False):
+            args.append('--write-auto-subs')
+        return args
+
+    # 单语下载行为保持上游；双语模式只下载上面指定的源语言。
     # 仅当用户显式允许 YouTube 自动生成字幕时才下载字幕。
     # yt-dlp 的 --write-subs 会下载所有字幕（含自动生成），
     # --no-write-auto-subs 在新版本中无效，无法可靠区分。

@@ -3469,6 +3469,17 @@ class TaskProcessor:
             updates['description_translated'] = translated.get('description', '')
 
         if translated.get('success'):
+            for field, original, switch, limit_key, separator in (
+                ('video_title_translated', 'video_title_original', 'BILINGUAL_TITLE_ENABLED', 'title_limit', ' / '),
+                ('description_translated', 'description_original', 'BILINGUAL_DESCRIPTION_ENABLED', 'description_limit', '\n\n'),
+            ):
+                target = str(updates.get(field) or '').strip()
+                source = str(task.get(original) or '').strip()
+                if target and source and target != source and _as_bool(self.config.get(switch, False)):
+                    # Reserve space for both languages; recompute from originals on retry.
+                    budget = effective_limits[limit_key] - len(separator)
+                    target_size = min(len(target), max(budget // 2, budget - len(source)))
+                    updates[field] = target[:target_size] + separator + source[:budget - target_size]
             if updates:
                 updates['error_message'] = None
                 updates['error_category'] = None
@@ -3516,6 +3527,7 @@ class TaskProcessor:
             return False
 
         translation_enabled = _as_bool(self.config.get('SUBTITLE_TRANSLATION_ENABLED', False))
+        bilingual = translation_enabled and _as_bool(self.config.get('SUBTITLE_BILINGUAL_ENABLED', False))
         config_embed_enabled = _as_bool(self.config.get('SUBTITLE_EMBED_IN_VIDEO', True))
         if embed_in_video_override is None:
             should_embed_subtitle = config_embed_enabled
@@ -3623,8 +3635,12 @@ class TaskProcessor:
                     if lower.endswith('.srt'):
                         subtitle_files.append(os.path.join(task_dir, name))
                     elif lower.endswith('.vtt'):
-                        # 自动将 VTT 转换为 SRT
                         vtt_path = os.path.join(task_dir, name)
+                        if bilingual:
+                            # 双语由 SubtitleReader 直接读取，避免旧转换过滤原文及合并 cue。
+                            subtitle_files.append(vtt_path)
+                            continue
+                        # 单语保留原有 VTT 转换行为。
                         srt_path = self._convert_vtt_to_srt(vtt_path, task_logger)
                         if srt_path and os.path.exists(srt_path):
                             subtitle_files.append(srt_path)
@@ -3804,7 +3820,19 @@ class TaskProcessor:
             zh_candidates = [f for f, lang in detected_list if str(lang).lower().startswith('zh')]
             en_candidates = [f for f, lang in detected_list if str(lang).lower().startswith('en')]
             
-            if zh_candidates:
+            if bilingual:
+                source_language = str(self.config.get('SUBTITLE_SOURCE_LANGUAGE', 'auto') or 'auto').lower()
+                if source_language == 'auto':
+                    source_language = 'en'
+                source_candidates = [f for f, lang in detected_list
+                                     if str(lang).lower().split('-')[0] == source_language.split('-')[0]
+                                     and not os.path.basename(f).startswith('translated_')]
+                if not source_candidates:
+                    task_logger.warning('双语字幕缺少配置的源语言字幕，不使用目标语言轨替代')
+                    return False
+                en_candidates = sorted(set(source_candidates))
+
+            if zh_candidates and not bilingual:
                 # 直接使用中文字幕，不进行翻译
                 subtitle_file = zh_candidates[0]
                 subtitle_lang = 'zh'
@@ -6991,6 +7019,8 @@ class TaskProcessor:
                 single_line_min_font_scale=single_line_min_font_scale,
                 style_overrides=style_overrides,
             )
+            if cue_dict.get('preserve_lines'):
+                wrapped_result = (cls._escape_ass_text(cue_dict.get('text', '')), {})
             # `return_meta=True` is expected to return a tuple, but keep a safe fallback
             # to satisfy static analysis and guard unexpected call-path changes.
             if isinstance(wrapped_result, tuple):
@@ -7060,11 +7090,20 @@ class TaskProcessor:
             with open(source_path, 'r', encoding='utf-8-sig', errors='replace') as subtitle_file:
                 subtitle_content = subtitle_file.read()
 
-            cues = self._parse_subtitle_text_to_cues(
-                subtitle_content,
-                video_width=video_width,
-                video_height=video_height,
-            )
+            config = getattr(self, 'config', {}) or {}
+            if (_as_bool(config.get('SUBTITLE_BILINGUAL_ENABLED', False))
+                    and _as_bool(config.get('SUBTITLE_TRANSLATION_ENABLED', False))
+                    and os.path.basename(subtitle_path).startswith('translated_')):
+                from .srt_transform_engine import SrtTransformEngine, SrtTransformConfig
+                cues = SrtTransformEngine(SrtTransformConfig()).parse_srt(subtitle_content)
+                for cue in cues:
+                    cue['preserve_lines'] = True
+            else:
+                cues = self._parse_subtitle_text_to_cues(
+                    subtitle_content,
+                    video_width=video_width,
+                    video_height=video_height,
+                )
             if not cues:
                 task_logger.error(f"未解析出有效字幕条目，无法生成ASS: {os.path.basename(subtitle_path)}")
                 return False

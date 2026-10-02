@@ -158,6 +158,9 @@
                                                         <input type="checkbox" name="TRANSLATE_DESCRIPTION" {% if config.TRANSLATE_DESCRIPTION %}checked{% endif %}>
                                                         自动翻译描述
                                                     </label>
+                                                    <label class="checkbox-label"><input type="checkbox" name="BILINGUAL_TITLE_ENABLED" {% if config.get('BILINGUAL_TITLE_ENABLED', False) %}checked{% endif %}>双语标题（中文 / 原文）</label>
+                                                    <label class="checkbox-label"><input type="checkbox" name="BILINGUAL_DESCRIPTION_ENABLED" {% if config.get('BILINGUAL_DESCRIPTION_ENABLED', False) %}checked{% endif %}>双语简介（中文在前）</label>
+                                                    <p class="help-text">分别依赖对应的自动翻译开关；不额外开启 AI。超出平台长度时保留两种语言并截短；转载设置不变。</p>
                                                     <label class="checkbox-label">
                                                         <input type="checkbox" name="GENERATE_TAGS" {% if config.GENERATE_TAGS %}checked{% endif %}>
                                                         自动生成标签
@@ -1439,6 +1442,8 @@
                                                                     <input type="checkbox" name="SUBTITLE_TRANSLATION_ENABLED" {% if config.SUBTITLE_TRANSLATION_ENABLED %}checked{% endif %}>
                                                                     启用字幕翻译
                                                                 </label>
+                                                                <label class="checkbox-label"><input type="checkbox" name="SUBTITLE_BILINGUAL_ENABLED" {% if config.get('SUBTITLE_BILINGUAL_ENABLED', False) %}checked{% endif %}>双语字幕（原文在上、译文在下）</label>
+                                                                <p class="help-text">仅在启用字幕翻译时生效，否则保持原有单语。英语源、中文目标时，英文在上、中文在下。按源语言下载并翻译（auto 使用 en），保留原文时间条目；目标语言沿用下方设置。同一语言键优先人工轨，缺失时仅在允许自动字幕后使用自动轨。不会合并已有中英文轨；en-US 等变体不跨键择优。</p>
                                                             </div>
                                                             <div class="col-md-6">
                                                                 <label class="checkbox-label">
