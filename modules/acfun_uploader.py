@@ -803,7 +803,7 @@ class AcfunUploader:
             original_url (str, optional): 原始视频URL
             original_uploader (str, optional): 原始上传者
             original_upload_date (str, optional): 原始上传日期
-            upload_append_repost_notice (bool, optional): 转载时是否追加固定声明
+            upload_append_repost_notice (bool, optional): 是否追加原视频信息，独立于投稿类型
             task_id (str, optional): 任务ID
             cover_mode (str): 封面处理模式，'crop'表示裁剪，'pad'表示添加黑边
             
@@ -853,12 +853,9 @@ class AcfunUploader:
             max_desc = ACFUN_DESCRIPTION_LIMIT
             max_fans_only_desc = 233
 
-            if str(copyright_type or '').strip().lower() == 'original':
-                # 用户选择自制：不提交转载来源，也不追加转载声明
-                original_url = original_uploader = original_upload_date = None
-
-            # 判断视频创作类型
-            creation_type = 1 if original_url else 3  # 1:转载, 3:原创
+            # 投稿类型仅控制平台来源字段，不清空简介用的原视频元数据。
+            is_original = str(copyright_type or '').strip().lower() == 'original'
+            creation_type = 1 if original_url and not is_original else 3  # 1:转载, 3:原创
             
             # 创建投稿
             success, result = self.create_douga(
@@ -869,7 +866,7 @@ class AcfunUploader:
                 desc=full_description,
                 tags=tags,
                 creation_type=creation_type,
-                original_url=original_url or "",
+                original_url="" if is_original else (original_url or ""),
                 cancel_event=cancel_event
             )
 

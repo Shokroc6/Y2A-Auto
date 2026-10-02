@@ -26,6 +26,8 @@ class UploadTypeConfigTests(unittest.TestCase):
         self.assertIn('name="UPLOAD_COPYRIGHT_TYPE"', html)
         self.assertIn('value="repost"', html)
         self.assertIn('value="original"', html)
+        self.assertIn('追加原视频信息（独立于投稿类型）', html)
+        self.assertNotIn('自制不填来源、不加转载声明', html)
 
 
 class _FileCase(unittest.TestCase):
@@ -52,6 +54,7 @@ class AcfunUploadTypeTests(_FileCase):
             self.video, self.cover, 'title', 'desc', ['t'], 1,
             original_url='https://www.youtube.com/watch?v=x',
             original_uploader='Someone', original_upload_date='20260101',
+            original_title='Full title',
             **kwargs,
         )
         return uploader.create_douga.call_args.kwargs
@@ -60,13 +63,20 @@ class AcfunUploadTypeTests(_FileCase):
         call = self._upload()
         self.assertEqual(call['creation_type'], 1)
         self.assertEqual(call['original_url'], 'https://www.youtube.com/watch?v=x')
-        self.assertEqual(call['desc'], '原作者：Someone\n发布日期：2026-01-01\n视频链接：https://www.youtube.com/watch?v=x\n\ndesc')
+        self.assertEqual(call['desc'], '原视频：Full title\n原作者：Someone\n发布日期：2026-01-01\n视频链接：https://www.youtube.com/watch?v=x\n\ndesc')
 
-    def test_original_drops_source_and_notice(self):
+    def test_original_drops_platform_source_but_keeps_four_information_lines(self):
         call = self._upload(copyright_type='original')
         self.assertEqual(call['creation_type'], 3)
         self.assertEqual(call['original_url'], '')
-        self.assertNotIn('转载', call['desc'])
+        self.assertEqual(call['desc'], '原视频：Full title\n原作者：Someone\n发布日期：2026-01-01\n视频链接：https://www.youtube.com/watch?v=x\n\ndesc')
+
+    def test_disabled_notice_does_not_change_platform_type_or_source(self):
+        for copyright_type in ('original', 'repost'):
+            call = self._upload(copyright_type=copyright_type, upload_append_repost_notice=False)
+            self.assertEqual(call['desc'], 'desc')
+            self.assertEqual(call['creation_type'], 3 if copyright_type == 'original' else 1)
+            self.assertEqual(call['original_url'], '' if copyright_type == 'original' else 'https://www.youtube.com/watch?v=x')
 
 
 class BilibiliUploadTypeTests(_FileCase):
@@ -100,12 +110,23 @@ class BilibiliUploadTypeTests(_FileCase):
         self.assertTrue(meta['original'])
         self.assertIsNone(meta['source'])
 
-    def test_original_description_has_no_repost_notice(self):
-        desc = bilibili_uploader.format_bilibili_description(
-            'body', original_url='https://www.youtube.com/watch?v=x',
-            original_uploader='Someone', copyright_type='original',
-        )
-        self.assertEqual(desc, 'body')
+    def test_original_description_keeps_source_information_when_enabled(self):
+        url = 'https://www.youtube.com/watch?v=x'
+        expected = '原视频：Full title\n原作者：Someone\n发布日期：2026-01-01\n视频链接：' + url + '\n\nbody'
+        for formatter in (acfun_uploader.build_upload_description, bilibili_uploader.format_bilibili_description):
+            for copyright_type in ('original', 'repost'):
+                with self.subTest(formatter=formatter.__name__, copyright_type=copyright_type):
+                    desc = formatter('body', original_url=url, original_title='Full title',
+                                     original_uploader='Someone', original_upload_date='20260101',
+                                     copyright_type=copyright_type)
+                    self.assertEqual(desc, expected)
+
+    def test_disabled_source_information_preserves_body_for_both_types(self):
+        body = '  body\nhttps://example.org/full?a=1&b=2\n'
+        for formatter in (acfun_uploader.build_upload_description, bilibili_uploader.format_bilibili_description):
+            for copyright_type in ('original', 'repost'):
+                self.assertEqual(formatter(body, original_title='Title', original_url='https://example.org',
+                                           copyright_type=copyright_type, append_repost_notice=False), body)
 
 
 

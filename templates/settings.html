@@ -217,14 +217,14 @@
                                                                 <option value="repost" {% if copyright_type != 'original' %}selected{% endif %}>转载（默认，附 YouTube 来源）</option>
                                                                 <option value="original" {% if copyright_type == 'original' %}selected{% endif %}>自制</option>
                                                             </select>
-                                                            <p class="help-text mt-1 mb-0">AcFun 与 bilibili 共用。自制不填来源、不加转载声明；搬运他人视频请保持转载，以免违反平台规则。</p>
+                                                            <p class="help-text mt-1 mb-0">AcFun 与 bilibili 共用。自制不填平台转载来源；简介原视频信息由下方开关独立控制。搬运他人视频请保持转载，以免违反平台规则。</p>
                                                         </div>
                                                     </div>
                                                     <div class="col-12">
                                                         <div class="settings-inline-options">
                                                             <label class="checkbox-label">
                                                                 <input type="checkbox" name="UPLOAD_APPEND_REPOST_NOTICE" {% if config.get('UPLOAD_APPEND_REPOST_NOTICE', True) %}checked{% endif %}>
-                                                                自动追加转载声明
+                                                                追加原视频信息（独立于投稿类型）
                                                             </label>
                                                             <label class="checkbox-label">
                                                                 <input type="checkbox" name="DELETE_DOWNLOAD_FILES_AFTER_UPLOAD" {% if config.get('DELETE_DOWNLOAD_FILES_AFTER_UPLOAD', False) %}checked{% endif %}>

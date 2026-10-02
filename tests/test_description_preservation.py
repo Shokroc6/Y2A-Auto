@@ -44,7 +44,8 @@ class DescriptionPreservationTests(unittest.TestCase):
                     'description_translated': 'Body\n' + url + '\n' + url,
                     'selected_partition_id_acfun': '1001', 'selected_partition_id_bilibili': '2001',
                     'metadata_json_path_local': str(metadata)}
-            config = {'ACFUN_COOKIES_PATH': harness.cookie_path, 'BILIBILI_COOKIES_PATH': harness.cookie_path}
+            config = {'ACFUN_COOKIES_PATH': harness.cookie_path, 'BILIBILI_COOKIES_PATH': harness.cookie_path,
+                      'UPLOAD_COPYRIGHT_TYPE': 'original', 'UPLOAD_APPEND_REPOST_NOTICE': True}
             ac = harness._run_upload('_do_upload_to_acfun', task, config, _FakeAcfunUploader, 'modules.acfun_uploader.AcfunUploader')
             bi = harness._run_upload('_do_upload_to_bilibili', task, config, _FakeBilibiliUploader, 'modules.bilibili_uploader.BilibiliUploader', is_bilibili=True)
             self.assertEqual(ac['original_title'], 'Actual metadata title')
@@ -94,7 +95,7 @@ class DescriptionPreservationTests(unittest.TestCase):
                             ok, message = uploader.upload_video('video', 'cover', 'Title', 'x' * (limit + 1), [], 1)
                             credentials.assert_not_called()
                     else:
-                        ok, message = uploader.upload_video('video', 'cover', 'Title', 'x' * (limit - 1), [], 1, original_url='https://example.org', original_uploader='Author')
+                        ok, message = uploader.upload_video('video', 'cover', 'Title', 'x' * (limit - 1), [], 1, original_url='https://example.org', original_uploader='Author', copyright_type='original')
                         uploader.login.assert_not_called()
                         uploader.create_douga.assert_not_called()
                 self.assertFalse(ok)

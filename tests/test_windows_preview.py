@@ -38,7 +38,7 @@ class WindowsPreviewTests(unittest.TestCase):
     def test_new_features_run_on_windows_and_inherited_release_is_upstream_only(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/windows-preview.yml').read_text())
         commands = '\n'.join(step.get('run', '') for step in workflow['jobs']['build-windows']['steps'])
-        for module in ('test_description_preservation', 'test_bundled_subtitle_fonts', 'test_platform_metadata_limits'):
+        for module in ('test_description_preservation', 'test_bundled_subtitle_fonts', 'test_frozen_font_resolution', 'test_upload_copyright_type', 'test_platform_metadata_limits'):
             self.assertIn(module, commands)
         release = yaml.safe_load((ROOT / '.github/workflows/windows-release.yml').read_text())
         self.assertEqual(release['jobs']['build-windows']['if'], "github.repository == 'fqscfqj/Y2A-Auto'")

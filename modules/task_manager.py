@@ -6783,8 +6783,19 @@ class TaskProcessor:
         return os.path.basename(str(font_name or '').strip()).casefold()
 
     @classmethod
+    def _bundled_fonts_dir(cls):
+        # Read-only fonts only: writable config/db/log roots stay beside the EXE.
+        if getattr(sys, 'frozen', False):
+            roots = [getattr(sys, '_MEIPASS', None),
+                     os.path.join(os.path.dirname(sys.executable), '_internal')]
+            for root in roots:
+                if root and os.path.isdir(os.path.join(root, 'fonts')):
+                    return os.path.join(root, 'fonts')
+        return get_app_subdir('fonts')
+
+    @classmethod
     def _iter_bundled_font_paths(cls):
-        fonts_dir = get_app_subdir('fonts')
+        fonts_dir = cls._bundled_fonts_dir()
         if not os.path.isdir(fonts_dir):
             return []
         font_paths = []
@@ -6917,7 +6928,7 @@ class TaskProcessor:
                 task_logger.warning(f"复制内置字幕字体失败: {exc}")
 
         if os.path.basename(matched_font['font_path']) == 'Roboto-Medium.ttf':
-            fallback_path = os.path.join(get_app_subdir('fonts'), 'NotoSansCJKsc-Regular.otf')
+            fallback_path = os.path.join(self._bundled_fonts_dir(), 'NotoSansCJKsc-Regular.otf')
             try:
                 shutil.copy2(fallback_path, os.path.join(temp_fonts_dir, os.path.basename(fallback_path)))
                 if task_logger:

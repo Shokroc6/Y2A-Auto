@@ -13,7 +13,7 @@ def build_repost_description(base_desc, original_url='', original_uploader='',
     except ValueError:
         date = ''  # Missing/invalid metadata is not a publish date.
     lines = []
-    if append_repost_notice and str(copyright_type or '').lower().strip() != 'original':
+    if append_repost_notice:
         for label, value in (('原视频', original_title), ('原作者', original_uploader),
                              ('发布日期', date), ('视频链接', original_url)):
             if value:
