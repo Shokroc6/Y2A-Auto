@@ -55,6 +55,15 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
         self.assertEqual(client.request.await_count, 1)
         self.assertNotIn('PRIVATE', str(failures))
 
+    def test_timeouts_have_bounded_extra_attempts(self):
+        client = Mock()
+        client.request = AsyncMock(side_effect=TimeoutError('secret request'))
+        with patch('modules.bili_sdk.video_uploader.get_client', return_value=client), patch('modules.bili_sdk.video_uploader.asyncio.sleep', new=AsyncMock()) as sleep:
+            with self.assertRaises(TimeoutError):
+                asyncio.run(self.uploader._upload_chunk(self.page, 0, 0, 1, dict(self.preupload)))
+        self.assertEqual(client.request.await_count, 5)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2, 4, 8])
+
     def test_chunk_retries_transient_failures_then_succeeds(self):
         client = Mock()
         client.request = AsyncMock(

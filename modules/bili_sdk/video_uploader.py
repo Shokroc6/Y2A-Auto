@@ -1154,8 +1154,7 @@ class VideoUploader(AsyncEvent):
             "page": page,
         }
 
-        max_attempts = 3
-        retryable_statuses = {408, 429, 500, 502, 503, 504}
+        max_attempts = 5  # Timeouts receive two additional bounded PUT attempts.
 
         for attempt in range(1, max_attempts + 1):
             attempt_data = {
@@ -1190,9 +1189,10 @@ class VideoUploader(AsyncEvent):
             except CancelledError:
                 raise
             except Exception as err:
-                from modules.upload_errors import retryable_chunk_error, safe_upload_error
+                from modules.upload_errors import retryable_chunk_error, safe_upload_error, curl_error_code
+                attempt_limit = 5 if curl_error_code(err) == 28 or isinstance(err, TimeoutError) else 3
                 retryable = retryable_chunk_error(err, status_code)
-                retrying = retryable and attempt < max_attempts
+                retrying = retryable and attempt < attempt_limit
                 retry_delay = min(2 ** (attempt - 1), 8) if retrying else 0
                 failure_data = {
                     **attempt_data,
