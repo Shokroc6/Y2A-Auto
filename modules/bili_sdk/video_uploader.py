@@ -1190,16 +1190,14 @@ class VideoUploader(AsyncEvent):
             except CancelledError:
                 raise
             except Exception as err:
-                retryable = (
-                    not isinstance(err, NetworkException)
-                    or status_code in retryable_statuses
-                )
+                from modules.upload_errors import retryable_chunk_error, safe_upload_error
+                retryable = retryable_chunk_error(err, status_code)
                 retrying = retryable and attempt < max_attempts
                 retry_delay = min(2 ** (attempt - 1), 8) if retrying else 0
                 failure_data = {
                     **attempt_data,
-                    "info": str(err),
-                    "err": err,
+                    "info": safe_upload_error(err),
+                    "err": ApiException(safe_upload_error(err)),
                     "status_code": status_code,
                     "retrying": retrying,
                     "retry_delay_seconds": retry_delay,

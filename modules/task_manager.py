@@ -2957,8 +2957,16 @@ class TaskProcessor:
                     task = get_task(task_id)
                     if ok:
                         completed_stages = _mark_stage_done(task_id, completed_stages, PIPELINE_STAGE_TRANSLATE_SUBTITLE)
+                    if subtitle_translation_enabled and not ok:
+                        update_task(task_id, status=TASK_STATES['FAILED'],
+                                    error_category='subtitle_translation_failed',
+                                    error_message='字幕翻译未通过验收，已停止自动上传；请检查保留的字幕产物。',
+                                    upload_progress=None)
+                        task_logger.error("字幕翻译失败，终止任务处理")
+                        return
                     if task is not None and task['status'] == TASK_STATES['FAILED']:
-                        task_logger.error("字幕处理失败，继续执行后续步骤")
+                        task_logger.error("字幕处理失败，终止任务处理")
+                        return
                 _raise_if_cancelled(task_id, task_logger)
 
             # 6. 上传
@@ -3636,6 +3644,8 @@ class TaskProcessor:
                     if not isinstance(name, str):
                         continue
                     lower = name.lower()
+                    if lower.startswith('translated_'):
+                        continue  # Generated translations are never source input.
                     if lower.endswith('.srt'):
                         subtitle_files.append(os.path.join(task_dir, name))
                     elif lower.endswith('.vtt'):
@@ -3736,13 +3746,13 @@ class TaskProcessor:
                                 update_task(task_id, error_message=merged_error)
                             self._mark_subtitle_issue(task_id, 'asr_no_subtitle')
                             task_logger.warning("语音识别未能生成字幕，跳过字幕流程")
-                            return True
+                            return not translation_enabled
                     else:
-                        task_logger.warning("语音识别未启用或视频文件缺失，跳过字幕流程")
-                        return True
+                        task_logger.warning("语音识别未启用或视频文件缺失，无法生成所需字幕")
+                        return not translation_enabled
                 else:
-                    task_logger.info("未启用语音识别，跳过字幕流程")
-                    return True
+                    task_logger.warning("未找到源字幕且未启用语音识别，无法完成字幕翻译")
+                    return not translation_enabled
 
             # ASR/VAD 质量结局与质检门控：
             # failed  → 直接拒绝烧录（来源不可信）；
@@ -4050,10 +4060,12 @@ class TaskProcessor:
                 task_logger.info("字幕翻译处理完成")
                 return True
             else:
-                task_logger.warning("字幕翻译失败，按策略跳过字幕产物并继续后续上传")
-                # 清除进度显示
+                task_logger.warning("字幕翻译未通过验收，停止自动上传并保留诊断产物")
                 update_task(
                     task_id,
+                    status=TASK_STATES['FAILED'],
+                    error_category='subtitle_translation_failed',
+                    error_message='字幕翻译未通过验收，已停止自动上传；请检查保留的字幕产物。',
                     subtitle_path_original=subtitle_file,
                     subtitle_path_translated=None,
                     subtitle_language_detected=subtitle_lang,
@@ -4063,12 +4075,13 @@ class TaskProcessor:
                 return False
                 
         except Exception as e:
-            task_logger.error(f"字幕翻译过程中发生错误: {str(e)}")
-            import traceback
-            task_logger.error(traceback.format_exc())
-            # 清除进度显示
+            # Provider exceptions may contain signed URLs or API credentials.
+            task_logger.error("字幕处理异常（%s）；保留中间产物供诊断", type(e).__name__)
             update_task(
                 task_id,
+                status=TASK_STATES['FAILED'] if translation_enabled else TASK_STATES['TRANSLATING_SUBTITLE'],
+                error_category='subtitle_translation_failed' if translation_enabled else None,
+                error_message='字幕翻译发生异常，已停止上传；请检查保留的字幕产物。' if translation_enabled else None,
                 subtitle_path_translated=None,
                 upload_progress=None,
                 silent=True,
@@ -8882,6 +8895,11 @@ class TaskProcessor:
             task_logger.error("任务不存在，无法执行上传前字幕处理")
             return None
 
+        if (_as_bool(self.config.get('SUBTITLE_TRANSLATION_ENABLED', False))
+                and task.get('error_category') == 'subtitle_translation_failed'):
+            task_logger.error("字幕翻译失败尚未修复，禁止复用缓存上传；请重新执行字幕处理")
+            return None
+
         video_path = task.get('video_path_local', '')
         if not video_path or not os.path.exists(video_path):
             task_logger.warning("视频文件不存在，无法进行上传前的字幕处理")
@@ -8921,7 +8939,7 @@ class TaskProcessor:
                 video_path,
                 subtitle_paths=_candidate_subtitle_paths(task, task_dir),
             )
-            if reusable_embedded_video and not embed_blocked:
+            if reusable_embedded_video and not embed_blocked and not _as_bool(self.config.get('SUBTITLE_TRANSLATION_ENABLED', False)):
                 if reusable_embedded_video != video_path:
                     update_task(task_id, video_path_local=reusable_embedded_video)
                 task_logger.info("检测到已存在带字幕视频，复用现有转码产物")
@@ -8934,6 +8952,15 @@ class TaskProcessor:
             subtitle_path_original, subtitle_path_translated, subtitle_language = self._resolve_existing_subtitle_assets(
                 task_id, task, task_dir
             )
+            cached_failures = [name for name in os.listdir(task_dir)
+                               if name.endswith('.translation-failed.json')]
+            if translation_enabled and (cached_failures or (
+                    not subtitle_path_original and (subtitle_path_translated or not _is_asr_enabled(self.config)))):
+                update_task(task_id, status=TASK_STATES['FAILED'],
+                            error_category='subtitle_translation_failed',
+                            error_message='已有字幕缺少合格源文件或存在翻译失败诊断，已停止缓存上传；请重新处理字幕。',
+                            upload_progress=None)
+                return None
             if subtitle_path_original and not subtitle_language:
                 subtitle_language = self._detect_subtitle_language(subtitle_path_original)
 
@@ -9028,6 +9055,16 @@ class TaskProcessor:
                         subtitle_files.append(os.path.join(task_dir, name))
             except Exception:
                 pass
+
+            if translation_enabled:
+                task_logger.info("上传前执行字幕翻译（已有字幕不依赖 ASR 开关）")
+                if not self._translate_subtitle(task_id, task_logger):
+                    update_task(task_id, status=TASK_STATES['FAILED'],
+                                error_category='subtitle_translation_failed',
+                                error_message='字幕翻译未通过验收，已停止上传；请检查保留的字幕产物。',
+                                upload_progress=None)
+                    return None
+                return get_task(task_id)
 
             if _is_asr_enabled(self.config):
                 if translation_enabled:
@@ -9564,6 +9601,7 @@ class TaskProcessor:
                 partition_id=partition_id,
                 original_url=original_url,
                 original_title=original_title,
+                original_body=task.get('description_original', '') if _as_bool(self.config.get('BILINGUAL_DESCRIPTION_ENABLED', False)) else '',
                 original_uploader=original_uploader,
                 original_upload_date=original_upload_date,
                 upload_append_repost_notice=bool(self.config.get('UPLOAD_APPEND_REPOST_NOTICE', True)),
@@ -9698,14 +9736,21 @@ class TaskProcessor:
                 base_desc=description,
                 original_url=original_url,
                 original_title=original_title,
+                original_body=task.get('description_original', '') if _as_bool(self.config.get('BILINGUAL_DESCRIPTION_ENABLED', False)) else '',
                 original_uploader=original_uploader,
                 original_upload_date=original_upload_date,
                 append_repost_notice=bool(self.config.get('UPLOAD_APPEND_REPOST_NOTICE', True)),
                 max_len=effective_limits['description_limit'],
                 copyright_type=self.config.get('UPLOAD_COPYRIGHT_TYPE', 'repost'),
             )
+        except ValueError as e:
+            update_task(task_id, status=TASK_STATES['FAILED'], error_message=str(e), upload_progress=None)
+            task_logger.error("来源声明超过平台预算，停止上传")
+            return False
         except Exception as e:
-            task_logger.warning(f"构建bilibili投稿简介失败，回退原简介: {e}")
+            update_task(task_id, status=TASK_STATES['FAILED'], error_message='构建投稿简介失败，已停止上传', upload_progress=None)
+            task_logger.error("构建bilibili投稿简介失败（%s）", type(e).__name__)
+            return False
 
         if self.config.get('YOUTUBE_UPLOADER_AS_FIRST_TAG', False):
             from modules.utils import safe_str

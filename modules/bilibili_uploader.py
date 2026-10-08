@@ -10,6 +10,7 @@ import traceback
 from logging.handlers import RotatingFileHandler
 from typing import Any, Callable, List, Optional, Tuple, Union
 
+from .upload_errors import safe_upload_error
 from .bili_sdk import video_uploader
 from .bili_sdk.exceptions import ArgsException, ResponseCodeException
 
@@ -108,10 +109,10 @@ def _remove_redundant_original_url(text: str, original_url: str) -> str:
 def format_bilibili_description(base_desc: str, original_url: str = "", original_uploader: str = "",
     original_upload_date: str = "", append_repost_notice: bool = True,
     max_len: int = BILIBILI_DESCRIPTION_LIMIT, copyright_type: str = "repost",
-    original_title: str = "") -> str:
+    original_title: str = "", original_body: str = "") -> str:
     from .repost_description import build_repost_description
     return build_repost_description(base_desc, original_url, original_uploader,
-        original_upload_date, original_title, append_repost_notice, max_len, copyright_type)
+        original_upload_date, original_title, append_repost_notice, max_len, copyright_type, original_body)
 
 
 def _extract_response_code_from_exception(exc: Exception) -> Optional[int]:
@@ -311,7 +312,7 @@ class BilibiliUploader:
 
             def _event_error(data: Any) -> str:
                 err = data.get("err") if isinstance(data, dict) else data
-                return _compact_exception_text(str(err)) or "未知错误"
+                return safe_upload_error(err) or "未知错误"
 
             @uploader.on(video_uploader.VideoUploaderEvents.AFTER_CHUNK.value)
             def on_after_chunk(data):
@@ -392,14 +393,16 @@ class BilibiliUploader:
                 if isinstance(err, ResponseCodeException):
                     self.log(f"bilibili上传失败事件: {_format_bilibili_exception(err)}")
                 else:
-                    self.log(f"bilibili上传失败事件: {_compact_exception_text(str(err))}")
+                    self.log(f"bilibili上传失败事件: {safe_upload_error(err)}")
 
             _emit_progress("0.0%")
             self.log("开始上传到bilibili")
             try:
                 result = asyncio.run(uploader.start())
-            except RuntimeError:
-                # 已有事件循环时，在新线程中运行
+            except RuntimeError as exc:
+                if 'asyncio.run() cannot be called from a running event loop' not in str(exc):
+                    raise
+                # Only event-loop setup failures are safe to rerun, not upload failures.
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     result = pool.submit(asyncio.run, uploader.start()).result()
@@ -442,8 +445,7 @@ class BilibiliUploader:
             if _is_bilibili_http_406(e):
                 hint = _bilibili_406_hint()
                 self.log(f"bilibili上传异常: {hint}")
-                self.log(traceback.format_exc())
                 return False, f"bilibili上传异常: {hint}"
-            self.log(f"bilibili上传异常: {_compact_exception_text(str(e))}")
-            self.log(traceback.format_exc())
-            return False, f"bilibili上传异常: {_compact_exception_text(str(e))}"
+            error = safe_upload_error(e)
+            self.log(f"bilibili上传异常: {error}")
+            return False, f"bilibili上传异常: {error}"

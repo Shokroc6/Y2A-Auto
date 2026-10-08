@@ -80,6 +80,7 @@ class DescriptionPreservationTests(unittest.TestCase):
             self.assertEqual(formatter('  Body\n', append_repost_notice=False), '  Body\n')
 
     def test_final_full_description_over_limit_rejected_before_network(self):
+        # Only an oversized notice is rejected; ordinary body text is truncated.
         from unittest.mock import patch, Mock
         from modules import acfun_uploader as ac, bilibili_uploader as bili
         for module, cls, limit in ((ac, ac.AcfunUploader, 1000), (bili, bili.BilibiliUploader, 2000)):
@@ -95,9 +96,9 @@ class DescriptionPreservationTests(unittest.TestCase):
                             ok, message = uploader.upload_video('video', 'cover', 'Title', 'x' * (limit + 1), [], 1)
                             credentials.assert_not_called()
                     else:
-                        ok, message = uploader.upload_video('video', 'cover', 'Title', 'x' * (limit - 1), [], 1, original_url='https://example.org', original_uploader='Author', copyright_type='original')
+                        ok, message = uploader.upload_video('video', 'cover', 'Title', 'Body', [], 1, original_title='x' * limit, copyright_type='original')
                         uploader.login.assert_not_called()
                         uploader.create_douga.assert_not_called()
                 self.assertFalse(ok)
-                self.assertIn('请编辑简介', message)
+                self.assertIn('编辑', message)
                 self.assertIn(str(limit), message)

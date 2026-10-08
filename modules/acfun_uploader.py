@@ -67,10 +67,10 @@ def compact_text(text: str, max_len: int) -> str:
 def build_upload_description(base_desc: str, original_url: str = "", original_uploader: str = "",
     original_upload_date: str = "", append_repost_notice: bool = True,
     max_len: int = ACFUN_DESCRIPTION_LIMIT, copyright_type: str = "repost",
-    original_title: str = "") -> str:
+    original_title: str = "", original_body: str = "") -> str:
     from .repost_description import build_repost_description
     return build_repost_description(base_desc, original_url, original_uploader,
-        original_upload_date, original_title, append_repost_notice, max_len, copyright_type)
+        original_upload_date, original_title, append_repost_notice, max_len, copyright_type, original_body)
 
 
 class AcfunUploader:
@@ -789,7 +789,7 @@ class AcfunUploader:
                      partition_id, original_url=None, original_uploader=None, 
                      original_upload_date=None, upload_append_repost_notice=True,
                      task_id=None, cover_mode='crop',
-                     cancel_event=None, copyright_type='repost', original_title=''):
+                     cancel_event=None, copyright_type='repost', original_title='', original_body=''):
         """
         上传视频到AcFun
         
@@ -819,7 +819,7 @@ class AcfunUploader:
             full_description = build_upload_description(
                 description, original_url or '', original_uploader or '',
                 original_upload_date or '', bool(upload_append_repost_notice),
-                copyright_type=copyright_type, original_title=original_title)
+                copyright_type=copyright_type, original_title=original_title, original_body=original_body)
             if len(full_description) > ACFUN_DESCRIPTION_LIMIT:
                 return False, f"AcFun简介含转载声明共{len(full_description)}字符，超过{ACFUN_DESCRIPTION_LIMIT}字符限制，请编辑简介后重试"
             # 尝试登录

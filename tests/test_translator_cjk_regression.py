@@ -439,9 +439,11 @@ class SourceLanguageParaphraseReturnTests(unittest.TestCase):
             translator._finalize_residual_untranslated_items(many),
             '4/20 行误判应当触发整批失败（这正是这条边界的文件级代价）')
 
-        # 1/20：阈值内 → 放行，但该行被标记并回退原文
+        # 默认严格策略：1/20 也失败，不偷偷开启回退；显式 partial 才放行。
         one = _items(1)
         translator = _translator()
+        self.assertFalse(translator._finalize_residual_untranslated_items(one))
+        translator.config.allow_partial = True
         self.assertTrue(translator._finalize_residual_untranslated_items(one))
         self.assertTrue(one[-1].residual_untranslated)
         self.assertEqual(one[-1].translated_text, '')

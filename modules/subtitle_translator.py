@@ -282,10 +282,7 @@ def _should_fail_translation_residue(
     allow_partial=False（默认）：任一条未译残留即失败，防止原文/译文混排烧录成片。
     allow_partial=True：保留旧的容忍阈值（同时超过 3 条且超过 15% 才失败）。
 
-    注意：本函数只表达「严格/宽松」两种策略语义，不含少量残留的追认逻辑；
-    真正决定是否写盘的是 SubtitleTranslator._finalize_residual_untranslated_items，
-    它在 allow_partial=False 时还会对少量（<=3 条且 <=15%）残留做标记后放行，
-    避免一条 URL/数字条目丢掉整份译文。
+    默认严格策略不追认少量残留；只有显式 allow_partial=True 才可回退原文。
     """
     if total_items <= 0 or unresolved_count <= 0:
         return False
@@ -576,7 +573,7 @@ class SubtitleReader:
             logger.info(f"SRT文件读取完成，共{len(blocks)}条字幕（已进行前处理）")
             return blocks
         except Exception as e:
-            logger.error(f"读取SRT文件失败: {e}")
+            logger.error(f"读取SRT文件失败: {type(e).__name__}")
             return []
     
     @staticmethod
@@ -618,7 +615,7 @@ class SubtitleReader:
             logger.info(f"VTT文件读取完成，共{len(items)}条字幕（已进行前处理）")
             return items
         except Exception as e:
-            logger.error(f"读取VTT文件失败: {e}")
+            logger.error(f"读取VTT文件失败: {type(e).__name__}")
             return []
 
 class SubtitleWriter:
@@ -660,7 +657,7 @@ class SubtitleWriter:
                     f.write(f"{text}\n\n")
             logger.info(f"SRT文件已保存: {output_path}")
         except Exception as e:
-            logger.error(f"写入SRT文件失败: {e}")
+            logger.error(f"写入SRT文件失败: {type(e).__name__}")
     
     @staticmethod
     def write_vtt(items: List[SubtitleItem], output_path: str, translated: bool = True):
@@ -679,7 +676,7 @@ class SubtitleWriter:
                     f.write(f"{text}\n\n")
             logger.info(f"VTT文件已保存: {output_path}")
         except Exception as e:
-            logger.error(f"写入VTT文件失败: {e}")
+            logger.error(f"写入VTT文件失败: {type(e).__name__}")
 
 class SubtitleAlignmentError(RuntimeError):
     """译文与原文无法按下标严格配对（缺项/合并/增项/条数不符）时抛出。
@@ -729,7 +726,7 @@ class LLMRequester:
             self.logger.info("OpenAI客户端初始化成功")
             
         except Exception as e:
-            self.logger.error(f"初始化OpenAI客户端失败: {e}")
+            self.logger.error(f"初始化OpenAI客户端失败: {type(e).__name__}")
     
     def translate_batch(self, texts: List[str], target_language: str, batch_id: str = "") -> List[str]:
         """批量翻译文本，使用结构化JSON输出"""
@@ -776,9 +773,9 @@ class LLMRequester:
             
         except Exception as e:
             with self._log_lock:
-                self.logger.error(f"批次 {batch_id} 翻译请求失败: {e}")
+                self.logger.error(f"批次 {batch_id} 翻译请求失败: {type(e).__name__}")
                 import traceback
-                self.logger.error(traceback.format_exc())
+                self.logger.error('异常详情已省略，避免泄露请求凭据')
             raise
 
     def _should_log_batch(self, batch_id: str) -> bool:
@@ -814,7 +811,7 @@ class LLMRequester:
             )
         except Exception as e:
             with self._log_lock:
-                self.logger.error(f"严格模式批次 {batch_id} 翻译失败: {e}")
+                self.logger.error(f"严格模式批次 {batch_id} 翻译失败: {type(e).__name__}")
             raise
 
     def _create_translation_completion(
@@ -1059,7 +1056,7 @@ class LLMRequester:
             return final_translations, True
         except Exception as e:
             with self._log_lock:
-                self.logger.error(f"批次 {batch_id}: 解析翻译结果失败: {e}")
+                self.logger.error(f"批次 {batch_id}: 解析翻译结果失败: {type(e).__name__}")
             return None, False
 
     @staticmethod
@@ -1389,9 +1386,9 @@ class SubtitleTranslator:
             return True
 
         except Exception as e:
-            self.logger.error(f"快速修复失败: {e}")
+            self.logger.error(f"快速修复失败: {type(e).__name__}")
             import traceback as _tb
-            self.logger.error(_tb.format_exc())
+            self.logger.error('异常详情已省略，避免泄露请求凭据')
             return False
     
     def translate_file(self, input_path: str, output_path: str,
@@ -1419,9 +1416,9 @@ class SubtitleTranslator:
             return self._translate_concurrent(items, output_path, progress_callback, cancel_event)
             
         except Exception as e:
-            self.logger.error(f"翻译字幕文件失败: {e}")
+            self.logger.error(f"翻译字幕文件失败: {type(e).__name__}")
             import traceback
-            self.logger.error(traceback.format_exc())
+            self.logger.error('异常详情已省略，避免泄露请求凭据')
             return False
     
     def _translate_concurrent(self, items: List[SubtitleItem], output_path: str,
@@ -1537,7 +1534,7 @@ class SubtitleTranslator:
                     except TaskCancelledError:
                         raise
                     except Exception as e:
-                        self.logger.warning(f"批次 {batch_id} 翻译失败 (重试 {retry + 1}/{self.config.max_retries}): {e}")
+                        self.logger.warning(f"批次 {batch_id} 翻译失败 (重试 {retry + 1}/{self.config.max_retries}): {type(e).__name__}")
                         if retry < self.config.max_retries - 1:
                             time.sleep(self.config.retry_delay)
                         else:
@@ -1569,7 +1566,7 @@ class SubtitleTranslator:
                     except TaskCancelledError:
                         raise
                     except Exception as e:
-                        self.logger.error(f"批次 {batch['batch_id']} 执行异常: {e}")
+                        self.logger.error(f"批次 {batch['batch_id']} 执行异常: {type(e).__name__}")
                 
                 self.logger.info(f"并发翻译完成，成功批次: {successful_batches}/{len(batches)}")
             
@@ -1584,6 +1581,19 @@ class SubtitleTranslator:
             self._repair_untranslated_items(items)
 
             if not self._finalize_residual_untranslated_items(items):
+                # Data-only sidecar: no config, request URLs, credentials or exception text.
+                diagnostic = {
+                    'reason': 'translation_acceptance_failed',
+                    'allow_partial': bool(self.config.allow_partial),
+                    'items': [{'index': item.index, 'start': item.start_time,
+                               'end': item.end_time, 'source': item.source_text,
+                               'translation': item.translated_text} for item in items],
+                }
+                try:
+                    Path(str(output_path) + '.translation-failed.json').write_text(
+                        json.dumps(diagnostic, ensure_ascii=False, indent=2), encoding='utf-8')
+                except OSError as exc:
+                    self.logger.error('保存翻译诊断产物失败（%s）', type(exc).__name__)
                 return False
 
             # 输出翻译后的文件
@@ -1593,9 +1603,9 @@ class SubtitleTranslator:
             self.logger.info("字幕翻译检测到任务取消请求")
             raise
         except Exception as e:
-            self.logger.error(f"并发翻译过程中发生错误: {e}")
+            self.logger.error(f"并发翻译过程中发生错误: {type(e).__name__}")
             import traceback
-            self.logger.error(traceback.format_exc())
+            self.logger.error('异常详情已省略，避免泄露请求凭据')
             return False
 
     def _likely_untranslated(self, src: str, dst: str) -> bool:
@@ -1723,11 +1733,8 @@ class SubtitleTranslator:
     def _finalize_residual_untranslated_items(self, items: List[SubtitleItem]) -> bool:
         """字幕翻译验收：决定未译残留条目是否可继续写盘。
 
-        - allow_partial=False（默认，SUBTITLE_TRANSLATION_ALLOW_PARTIAL）：
-          整批未译（残留超过 3 条或超过 15%）仍然整体失败并返回 False，调用方
-          不写盘；但**少量残留**（<=3 条且 <=15%）按「标记 + 回退原文」放行 ——
-          False 的语义是「不把原文当译文写盘」，而不是「因为一条 URL/型号丢掉
-          整份译文」。标记后的条目译文置空，写盘阶段回退原文。
+        - allow_partial=False（默认）：任何未译残留均失败；只保留诊断产物，
+          不把原文回退作为合格译文写入可上传字幕。
         - allow_partial=True：保留旧的少量残留容忍阈值；未译条目打
           residual_untranslated 标记、译文置空并记录 warning，
           写盘阶段按 SubtitleWriter 的回退语义输出原文。
@@ -1742,22 +1749,12 @@ class SubtitleTranslator:
         unresolved_ratio = unresolved_count / max(1, total_items)
         sample_indices = unresolved_indices[:5]
         if _should_fail_translation_residue(total_items, unresolved_count, allow_partial=allow_partial):
-            if allow_partial or not self._residual_within_tolerance(unresolved_count, total_items):
-                self.logger.error(
-                    "字幕翻译验收失败：仍有 %s/%s 条疑似未翻译（%.1f%%），样本索引=%s（allow_partial=%s）",
-                    unresolved_count,
-                    total_items,
-                    unresolved_ratio * 100.0,
-                    sample_indices,
-                    allow_partial,
-                )
-                return False
-            self.logger.warning(
-                "字幕翻译存在少量未译残留（%s/%s，%.1f%%），按「标记 + 回退原文」放行以避免丢弃整份译文",
-                unresolved_count,
-                total_items,
-                unresolved_ratio * 100.0,
+            self.logger.error(
+                "字幕翻译验收失败：仍有 %s/%s 条疑似未翻译（%.1f%%），样本索引=%s（allow_partial=%s）",
+                unresolved_count, total_items, unresolved_ratio * 100.0,
+                sample_indices, allow_partial,
             )
+            return False
 
         self.logger.warning(
             "字幕翻译验收保留未译残留：%s/%s 条仍疑似未翻译（%.1f%%），下标=%s；"
@@ -1814,7 +1811,7 @@ class SubtitleTranslator:
                 try:
                     translations = self.llm_requester.translate_batch(texts, self.config.target_language, batch_id=f"repair_{self.task_id}_{chunk_no}")
                 except Exception as e:
-                    self.logger.warning(f"补翻批次失败，跳过该批：{e}")
+                    self.logger.warning(f"补翻批次失败，跳过该批：{type(e).__name__}")
                     continue
                 for j, idx in enumerate(chunk):
                     try:
@@ -1842,7 +1839,7 @@ class SubtitleTranslator:
                 try:
                     translations = self.llm_requester.translate_batch_strict(texts, self.config.target_language, batch_id=f"repair_strict_{self.task_id}_{chunk_no}")
                 except Exception as e:
-                    self.logger.warning(f"严格模式补翻批次失败，跳过该批：{e}")
+                    self.logger.warning(f"严格模式补翻批次失败，跳过该批：{type(e).__name__}")
                     continue
                 for j, idx in enumerate(chunk):
                     try:
@@ -1852,7 +1849,7 @@ class SubtitleTranslator:
                     except Exception:
                         pass
         except Exception as e:
-            self.logger.warning(f"补翻流程出现异常：{e}")
+            self.logger.warning(f"补翻流程出现异常：{type(e).__name__}")
 
     def _sanitize_translated_text(self, text: str) -> str:
         """清洗译文：移除无关的序号/项目符号/引号，合并重复行"""
@@ -1937,7 +1934,7 @@ class SubtitleTranslator:
             return True
             
         except Exception as e:
-            self.logger.error(f"写入翻译文件失败: {e}")
+            self.logger.error(f"写入翻译文件失败: {type(e).__name__}")
             return False
     
     def get_subtitle_preview(self, file_path: str, max_items: int = 5) -> List[Dict]:
@@ -1962,7 +1959,7 @@ class SubtitleTranslator:
             ]
             
         except Exception as e:
-            self.logger.error(f"获取字幕预览失败: {e}")
+            self.logger.error(f"获取字幕预览失败: {type(e).__name__}")
             return []
 
 # 工厂函数
@@ -2021,7 +2018,7 @@ def create_translator_from_config(app_config: Dict, task_id: Optional[str] = Non
             prompt_mode, prompt_text = read_prompt_config_from_app_config(app_config, 'SUBTITLE_TRANSLATE')
             prompt_strict_mode, prompt_strict_text = read_prompt_config_from_app_config(app_config, 'SUBTITLE_TRANSLATE_STRICT')
         except Exception as exc:
-            logger.debug(f"读取 Prompt 中心配置失败，将回退 builtin: {exc}")
+            logger.debug(f"读取 Prompt 中心配置失败，将回退 builtin: {type(exc).__name__}")
 
         translation_config = TranslationConfig(
             bilingual=coerce_bool(app_config.get('SUBTITLE_BILINGUAL_ENABLED', False)),
@@ -2052,5 +2049,5 @@ def create_translator_from_config(app_config: Dict, task_id: Optional[str] = Non
         return SubtitleTranslator(translation_config, task_id or "unknown")
         
     except Exception as e:
-        logger.error(f"创建翻译器失败: {e}")
+        logger.error(f"创建翻译器失败: {type(e).__name__}")
         return None 

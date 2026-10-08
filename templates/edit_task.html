@@ -363,9 +363,9 @@
 <script>
     document.addEventListener('DOMContentLoaded', function() {
         var _platformConfig = {
-            'both':     { titleSoft: 50,  titleHard: 50,  descSoft: 1000, descHard: 1000, titleMsg: '已开启双平台投稿，标题按共同最低限制 50 字执行，超出部分会在上传时自动截断。', descMsg: '已开启双平台投稿，简介含转载声明按共同最低限制 1000 字执行，超限停止上传，请编辑后重试。' },
-            'bilibili': { titleSoft: 80,  titleHard: 80,  descSoft: 2000, descHard: 2000, titleMsg: 'bilibili 标题上限为 80 字，超出部分会在上传时自动截断。', descMsg: 'bilibili 简介含转载声明上限为 2000 字，超限停止上传，请编辑后重试。' },
-            'acfun':    { titleSoft: 50,  titleHard: 50,  descSoft: 1000, descHard: 1000, titleMsg: 'AcFun 标题上限为 50 字，超出部分会在上传时自动截断。', descMsg: 'AcFun 简介含转载声明上限为 1000 字，超限停止上传，请编辑后重试。' }
+            'both':     { titleSoft: 50,  titleHard: 50,  descSoft: 1000, descHard: 1000, titleMsg: '已开启双平台投稿，标题按共同最低限制 50 字执行，超出部分会在上传时自动截断。', descMsg: '已开启双平台投稿，简介含转载声明按共同最低限制 1000 字执行，超限时优先保留完整来源信息，正文自动截断（省略号计入预算）；来源信息自身超限会停止上传。' },
+            'bilibili': { titleSoft: 80,  titleHard: 80,  descSoft: 2000, descHard: 2000, titleMsg: 'bilibili 标题上限为 80 字，超出部分会在上传时自动截断。', descMsg: 'bilibili 简介含转载声明上限为 2000 字，超限时优先保留完整来源信息，正文自动截断（省略号计入预算）；来源信息自身超限会停止上传。' },
+            'acfun':    { titleSoft: 50,  titleHard: 50,  descSoft: 1000, descHard: 1000, titleMsg: 'AcFun 标题上限为 50 字，超出部分会在上传时自动截断。', descMsg: 'AcFun 简介含转载声明上限为 1000 字，超限时优先保留完整来源信息，正文自动截断（省略号计入预算）；来源信息自身超限会停止上传。' }
         };
         var _cfg = _platformConfig[document.querySelector('.edit-task-container').dataset.uploadTarget] || _platformConfig['acfun'];
 

@@ -44,6 +44,17 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_certificate_error_is_not_retried_and_secrets_are_not_dispatched(self):
+        client = Mock()
+        client.request = AsyncMock(side_effect=RuntimeError('curl: (60) certificate expired https://secret/?token=PRIVATE headers=PRIVATE'))
+        failures = []
+        self.uploader.add_event_listener(VideoUploaderEvents.CHUNK_FAILED.value, failures.append)
+        with patch('modules.bili_sdk.video_uploader.get_client', return_value=client), patch('modules.bili_sdk.video_uploader.asyncio.sleep', new=AsyncMock()):
+            with self.assertRaises(Exception):
+                asyncio.run(self.uploader._upload_chunk(self.page, 0, 0, 1, dict(self.preupload)))
+        self.assertEqual(client.request.await_count, 1)
+        self.assertNotIn('PRIVATE', str(failures))
+
     def test_chunk_retries_transient_failures_then_succeeds(self):
         client = Mock()
         client.request = AsyncMock(
