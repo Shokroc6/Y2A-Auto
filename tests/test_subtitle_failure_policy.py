@@ -72,7 +72,7 @@ class SubtitleFailurePolicyTests(SubtitleEmbedOnlyFlowTests):
         self.assertEqual(task['status'], tm.TASK_STATES['FAILED'])
         self.assertEqual(task['error_category'], 'subtitle_translation_failed')
         self.assertIn('字幕翻译', task['error_message'])
-        self.assertEqual(task['subtitle_path_original'], source)
+        self.assertEqual(__import__('os').path.normpath(task['subtitle_path_original']), __import__('os').path.normpath(source))
         self.assertTrue(__import__('os').path.exists(source))
 
     def test_prepare_translates_existing_english_when_asr_disabled(self):
