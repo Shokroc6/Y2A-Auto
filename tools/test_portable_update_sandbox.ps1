@@ -8,7 +8,8 @@ $tokens=$null;$errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseInput($source,[ref]$tokens,[ref]$errors)
 @{phase='parse';version=$PSVersionTable.PSVersion.ToString();errors=@($errors | ForEach-Object {$_.Message})} | ConvertTo-Json -Compress
 if($errors.Count){exit 2}
-$parent=Join-Path $env:TEMP ('y2a-independent-review-'+[guid]::NewGuid().ToString('N'))
+$nativeTemp=Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
+$parent=Join-Path $nativeTemp ('y2a-independent-review-'+[guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $parent | Out-Null
 $script=Join-Path $parent 'candidate.ps1'
 [IO.File]::WriteAllText($script,$source,(New-Object Text.UTF8Encoding($true)))
