@@ -638,7 +638,7 @@ class SubtitleWriter:
         return '\n'.join(normalized_lines)
 
     @staticmethod
-    def write_srt(items: List[SubtitleItem], output_path: str, translated: bool = True):
+    def write_srt(items: List[SubtitleItem], output_path: str, translated: bool = True) -> bool:
         """写入SRT字幕文件"""
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
@@ -656,11 +656,13 @@ class SubtitleWriter:
                     f.write(f"{item.time_range}\n")
                     f.write(f"{text}\n\n")
             logger.info(f"SRT文件已保存: {output_path}")
+            return True
         except Exception as e:
             logger.error(f"写入SRT文件失败: {type(e).__name__}")
+            return False
     
     @staticmethod
-    def write_vtt(items: List[SubtitleItem], output_path: str, translated: bool = True):
+    def write_vtt(items: List[SubtitleItem], output_path: str, translated: bool = True) -> bool:
         """写入VTT字幕文件"""
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
@@ -675,8 +677,10 @@ class SubtitleWriter:
                     f.write(f"{start_time} --> {end_time}\n")
                     f.write(f"{text}\n\n")
             logger.info(f"VTT文件已保存: {output_path}")
+            return True
         except Exception as e:
             logger.error(f"写入VTT文件失败: {type(e).__name__}")
+            return False
 
 class SubtitleAlignmentError(RuntimeError):
     """译文与原文无法按下标严格配对（缺项/合并/增项/条数不符）时抛出。
@@ -1380,7 +1384,8 @@ class SubtitleTranslator:
             if out_path.lower().endswith('.vtt'):
                 out_path = out_path[:-4] + '.srt'
                 
-            self.writer.write_srt(items, out_path, translated=True)
+            if self.writer.write_srt(items, out_path, translated=True) is not True:
+                return False
 
             self.logger.info(f"快速修复完成：{out_path}")
             return True
@@ -1596,8 +1601,11 @@ class SubtitleTranslator:
                     self.logger.error('保存翻译诊断产物失败（%s）', type(exc).__name__)
                 return False
 
-            # 输出翻译后的文件
-            return self._write_translated_file(items, output_path)
+            # Only a validated, successfully written output supersedes active diagnostics.
+            if not self._write_translated_file(items, output_path):
+                return False
+            archive_translation_failure(output_path)
+            return True
             
         except TaskCancelledError:
             self.logger.info("字幕翻译检测到任务取消请求")
@@ -1916,20 +1924,21 @@ class SubtitleTranslator:
                           item.source_text + ('\n' + item.translated_text if item.translated_text and item.translated_text != item.source_text else ''))
                           for item in items]
                 if output_ext == '.srt':
-                    self.writer.write_srt(paired, output_path, translated=False)
+                    return self.writer.write_srt(paired, output_path, translated=False) is True
                 elif output_ext == '.vtt':
-                    self.writer.write_vtt(paired, output_path, translated=False)
+                    return self.writer.write_vtt(paired, output_path, translated=False) is True
                 else:
                     return False
-                return True
             if output_ext == '.srt':
-                self.writer.write_srt(items, output_path, translated=True)
+                written = self.writer.write_srt(items, output_path, translated=True)
             elif output_ext == '.vtt':
-                self.writer.write_vtt(items, output_path, translated=True)
+                written = self.writer.write_vtt(items, output_path, translated=True)
             else:
                 self.logger.error(f"不支持的输出格式: {output_ext}")
                 return False
             
+            if written is not True:
+                return False
             self.logger.info(f"字幕翻译完成: {output_path}")
             return True
             
@@ -1961,6 +1970,14 @@ class SubtitleTranslator:
         except Exception as e:
             self.logger.error(f"获取字幕预览失败: {type(e).__name__}")
             return []
+
+def archive_translation_failure(output_path):
+    """Keep diagnostics as history, not as the current output's rejection marker."""
+    marker = Path(str(output_path) + '.translation-failed.json')
+    if marker.exists():
+        import uuid
+        marker.rename(Path(str(output_path) + '.translation-history-' + uuid.uuid4().hex + '.json'))
+
 
 # 工厂函数
 def create_translator_from_config(app_config: Dict, task_id: Optional[str] = None) -> Optional[SubtitleTranslator]:

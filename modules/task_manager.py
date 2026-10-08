@@ -4001,6 +4001,9 @@ class TaskProcessor:
             
             if success:
                 task_logger.info("字幕翻译完成")
+                latest = get_task(task_id) or {}
+                if latest.get('error_category') == 'subtitle_translation_failed':
+                    update_task(task_id, error_category=None, error_message=None, silent=True)
                 # 清除翻译进度显示
                 update_task(task_id, upload_progress=None, silent=True)
                 
@@ -8895,10 +8898,6 @@ class TaskProcessor:
             task_logger.error("任务不存在，无法执行上传前字幕处理")
             return None
 
-        if (_as_bool(self.config.get('SUBTITLE_TRANSLATION_ENABLED', False))
-                and task.get('error_category') == 'subtitle_translation_failed'):
-            task_logger.error("字幕翻译失败尚未修复，禁止复用缓存上传；请重新执行字幕处理")
-            return None
 
         video_path = task.get('video_path_local', '')
         if not video_path or not os.path.exists(video_path):
@@ -8952,15 +8951,34 @@ class TaskProcessor:
             subtitle_path_original, subtitle_path_translated, subtitle_language = self._resolve_existing_subtitle_assets(
                 task_id, task, task_dir
             )
-            cached_failures = [name for name in os.listdir(task_dir)
-                               if name.endswith('.translation-failed.json')]
-            if translation_enabled and (cached_failures or (
-                    not subtitle_path_original and (subtitle_path_translated or not _is_asr_enabled(self.config)))):
+            if translation_enabled and (not subtitle_path_original and (
+                    subtitle_path_translated or not _is_asr_enabled(self.config))):
                 update_task(task_id, status=TASK_STATES['FAILED'],
                             error_category='subtitle_translation_failed',
                             error_message='已有字幕缺少合格源文件或存在翻译失败诊断，已停止缓存上传；请重新处理字幕。',
                             upload_progress=None)
                 return None
+            if translation_enabled and subtitle_path_original:
+                # Use the same tolerant reader as translated-cache validation, including
+                # unnumbered ASR SRT. Language labels must never bypass cue validation.
+                from modules.subtitle_translator import SubtitleReader
+                reader = SubtitleReader.read_vtt if subtitle_path_original.lower().endswith('.vtt') else SubtitleReader.read_srt
+                source_cues = reader(subtitle_path_original, preserve_lines=True)
+                def valid_source_cue(cue):
+                    times = []
+                    for value in (cue.start_time, cue.end_time):
+                        match = re.fullmatch(r'(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})', value)
+                        if not match:
+                            return False
+                        hours, minutes, seconds, millis = map(int, match.groups())
+                        if minutes >= 60 or seconds >= 60:
+                            return False
+                        times.append(((hours * 60 + minutes) * 60 + seconds) * 1000 + millis)
+                    return bool(cue.source_text.strip()) and times[1] > times[0]
+                if not source_cues or not all(valid_source_cue(cue) for cue in source_cues):
+                    update_task(task_id, status=TASK_STATES['FAILED'], error_category='subtitle_translation_failed',
+                                error_message='源字幕没有合格的非空字幕条目/时间轴，已停止上传；请重新处理字幕。', upload_progress=None)
+                    return None
             if subtitle_path_original and not subtitle_language:
                 subtitle_language = self._detect_subtitle_language(subtitle_path_original)
 
@@ -8977,28 +8995,41 @@ class TaskProcessor:
 
             if subtitle_path_translated and os.path.exists(subtitle_path_translated):
                 if translation_enabled:
-                    from modules.subtitle_translator import SubtitleReader, SubtitleTranslator, TranslationConfig
+                    from modules.subtitle_translator import (SubtitleReader, SubtitleTranslator, TranslationConfig,
+                                                             _should_fail_translation_residue, archive_translation_failure)
                     reader = SubtitleReader.read_vtt if subtitle_path_original.lower().endswith('.vtt') else SubtitleReader.read_srt
                     sources = reader(subtitle_path_original, preserve_lines=True)
                     outputs = SubtitleReader.read_srt(subtitle_path_translated, preserve_lines=True)
                     checker = SubtitleTranslator.__new__(SubtitleTranslator)
                     checker.config = TranslationConfig(target_language=self.config.get('SUBTITLE_TARGET_LANGUAGE', 'zh-CN'))
                     accepted = bool(sources) and len(sources) == len(outputs)
+                    residual_count = 0
                     for src, dst in zip(sources, outputs):
                         text = dst.source_text
                         if _as_bool(self.config.get('SUBTITLE_BILINGUAL_ENABLED', False)):
-                            suffix = '\n' + src.source_text
-                            if not text.endswith(suffix):
+                            prefix = src.source_text + '\n'
+                            if text == src.source_text:
+                                pass  # Writer's verbatim/partial fallback has no second line.
+                            elif not text.startswith(prefix):
                                 accepted = False
                             else:
-                                text = text[:-len(suffix)]
-                        if (src.start_time != dst.start_time or src.end_time != dst.end_time
-                                or checker._likely_untranslated(src.source_text, text)):
+                                text = text[len(prefix):]
+                        if src.start_time != dst.start_time or src.end_time != dst.end_time:
                             accepted = False
+                        if checker._likely_untranslated(src.source_text, text):
+                            residual_count += 1
+                    if _should_fail_translation_residue(len(sources), residual_count,
+                            allow_partial=_as_bool(self.config.get('SUBTITLE_TRANSLATION_ALLOW_PARTIAL', False))):
+                        accepted = False
                     if not accepted:
                         update_task(task_id, status=TASK_STATES['FAILED'], error_category='subtitle_translation_failed',
                                     error_message='缓存译文未通过源文配对/翻译验收，已停止上传；保留原文件，请重新处理字幕。', upload_progress=None)
                         return None
+                    # Latest source/output validation supersedes only this output's marker.
+                    archive_translation_failure(subtitle_path_translated)
+                    if task.get('error_category') == 'subtitle_translation_failed':
+                        update_task(task_id, error_category=None, error_message=None,
+                                    status=TASK_STATES['READY_FOR_UPLOAD'])
                 if not should_embed_subtitle:
                     task_logger.info("检测到已存在翻译字幕且未开启烧录，复用现有字幕产物")
                     return get_task(task_id)
@@ -9201,7 +9232,11 @@ class TaskProcessor:
             task_logger.info("上传前字幕处理检测到任务取消请求")
             raise
         except Exception as e:
-            task_logger.error(f"上传前字幕处理出现异常: {e}")
+            task_logger.error("上传前字幕处理出现异常（%s）", type(e).__name__)
+            if _as_bool(self.config.get('SUBTITLE_TRANSLATION_ENABLED', False)):
+                update_task(task_id, status=TASK_STATES['FAILED'], error_category='subtitle_translation_failed',
+                            error_message='上传前字幕验收发生异常，已停止上传；保留产物供诊断。', upload_progress=None)
+                return None
 
         return get_task(task_id)
     
@@ -9431,8 +9466,6 @@ class TaskProcessor:
             task_logger.error("任务不存在")
             return
         
-        update_task(task_id, status=TASK_STATES['UPLOADING'])
-        
         # 获取任务信息
         video_path = task.get('video_path_local', '') if task else ''
         cover_path = task.get('cover_path_local', '') if task else ''
@@ -9476,8 +9509,13 @@ class TaskProcessor:
         cover_path = self._recover_cover_path(task_id, cover_path, task_logger)
         
         if not subtitle_prepared:
-            task = self._prepare_subtitle_for_upload(task_id, task_logger) or task
-            video_path = task.get('video_path_local', '') if task else video_path
+            task = self._prepare_subtitle_for_upload(task_id, task_logger)
+            if task is None or task.get('status') == TASK_STATES['FAILED']:
+                return
+            video_path = task.get('video_path_local', '')
+
+        if task.get('status') == TASK_STATES['FAILED']:
+            return
 
         # 重新设置状态为上传中（字幕翻译可能已在上述步骤执行）
         update_task(task_id, status=TASK_STATES['UPLOADING'])
@@ -9681,8 +9719,6 @@ class TaskProcessor:
             task_logger.error("任务不存在")
             return
 
-        update_task(task_id, status=TASK_STATES['UPLOADING'], upload_progress='0.0%')
-
         video_path = task.get('video_path_local', '') if task else ''
         cover_path = task.get('cover_path_local', '') if task else ''
         title = (task.get('video_title_translated', '') or task.get('video_title_original', '')) if task else ''
@@ -9721,8 +9757,13 @@ class TaskProcessor:
         cover_path = self._recover_cover_path(task_id, cover_path, task_logger)
 
         if not subtitle_prepared:
-            task = self._prepare_subtitle_for_upload(task_id, task_logger) or task
-            video_path = task.get('video_path_local', '') if task else video_path
+            task = self._prepare_subtitle_for_upload(task_id, task_logger)
+            if task is None or task.get('status') == TASK_STATES['FAILED']:
+                return
+            video_path = task.get('video_path_local', '')
+
+        if task.get('status') == TASK_STATES['FAILED']:
+            return
 
         update_task(task_id, status=TASK_STATES['UPLOADING'], upload_progress='0.0%')
 

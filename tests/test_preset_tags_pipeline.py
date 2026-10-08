@@ -176,6 +176,10 @@ class UploadPathTagResolutionTests(unittest.TestCase):
 
     def _run_upload(self, upload_method_name, task, config, uploader_cls, uploader_patch_target,
                     is_bilibili=False):
+        # Each platform call models an independently subtitle-prepared ready task.
+        # The fake previous platform may set FAILED; never rely on production
+        # overwriting that state before the new fail-closed subtitle guard.
+        task['status'] = tm.TASK_STATES['READY_FOR_UPLOAD']
         processor = tm.TaskProcessor(dict(config))
 
         def fake_update_task(_task_id, **kwargs):
