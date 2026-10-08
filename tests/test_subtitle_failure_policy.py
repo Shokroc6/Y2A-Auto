@@ -21,6 +21,17 @@ class SubtitleFailurePolicyTests(SubtitleEmbedOnlyFlowTests):
                             'AUTO_MODE_ENABLED': True}
         return processor
 
+    def test_cached_untranslated_subtitle_blocks_upload(self):
+        source = self.task_dir + '/video.en.srt'
+        translated = self.task_dir + '/translated_video.en.srt'
+        self._write_srt(source)
+        self._write_srt(translated)
+        task = self._task()
+        task.update(subtitle_path_original=source, subtitle_path_translated=translated)
+        result = self._run_with_task_patches(task, lambda: self._processor()._prepare_subtitle_for_upload(self.task_id, MagicMock()))
+        self.assertIsNone(result)
+        self.assertEqual(task['status'], tm.TASK_STATES['FAILED'])
+
     def test_missing_source_blocks_upload(self):
         task = self._task()
         result = self._run_with_task_patches(task, lambda: self._processor()._prepare_subtitle_for_upload(self.task_id, MagicMock()))

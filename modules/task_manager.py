@@ -8976,6 +8976,29 @@ class TaskProcessor:
                 task = get_task(task_id) or task
 
             if subtitle_path_translated and os.path.exists(subtitle_path_translated):
+                if translation_enabled:
+                    from modules.subtitle_translator import SubtitleReader, SubtitleTranslator, TranslationConfig
+                    reader = SubtitleReader.read_vtt if subtitle_path_original.lower().endswith('.vtt') else SubtitleReader.read_srt
+                    sources = reader(subtitle_path_original, preserve_lines=True)
+                    outputs = SubtitleReader.read_srt(subtitle_path_translated, preserve_lines=True)
+                    checker = SubtitleTranslator.__new__(SubtitleTranslator)
+                    checker.config = TranslationConfig(target_language=self.config.get('SUBTITLE_TARGET_LANGUAGE', 'zh-CN'))
+                    accepted = bool(sources) and len(sources) == len(outputs)
+                    for src, dst in zip(sources, outputs):
+                        text = dst.source_text
+                        if _as_bool(self.config.get('SUBTITLE_BILINGUAL_ENABLED', False)):
+                            suffix = '\n' + src.source_text
+                            if not text.endswith(suffix):
+                                accepted = False
+                            else:
+                                text = text[:-len(suffix)]
+                        if (src.start_time != dst.start_time or src.end_time != dst.end_time
+                                or checker._likely_untranslated(src.source_text, text)):
+                            accepted = False
+                    if not accepted:
+                        update_task(task_id, status=TASK_STATES['FAILED'], error_category='subtitle_translation_failed',
+                                    error_message='缓存译文未通过源文配对/翻译验收，已停止上传；保留原文件，请重新处理字幕。', upload_progress=None)
+                        return None
                 if not should_embed_subtitle:
                     task_logger.info("检测到已存在翻译字幕且未开启烧录，复用现有字幕产物")
                     return get_task(task_id)
