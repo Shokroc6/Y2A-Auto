@@ -8847,6 +8847,21 @@ class TaskProcessor:
         candidate = os.path.join(video_dir, f"{video_name}_with_subtitle.mp4")
         return candidate if _is_fresh(candidate) else ''
 
+    def _get_original_video_for_reembed(self, task_id, video_path, task_logger):
+        """Never layer newly accepted captions onto a previously burned video."""
+        if not os.path.splitext(os.path.basename(video_path))[0].endswith('_with_subtitle'):
+            return video_path
+        # Downloader's canonical merged media, not suffix stripping/provenance guessing.
+        original = os.path.join(os.path.dirname(video_path), 'video.mp4')
+        if os.path.isfile(original):
+            return original
+        task_logger.error("字幕需要重新烧录，但原始 video.mp4 缺失；禁止叠加烧录")
+        update_task(task_id, status=TASK_STATES['FAILED'],
+                    error_category='subtitle_embed_failed',
+                    error_message='字幕已更新但原始视频缺失，已停止上传；请恢复原始 video.mp4 后重试。',
+                    upload_progress=None)
+        return ''
+
     def _resolve_existing_subtitle_assets(self, task_id: str, task: dict, task_dir: str):
         def _existing_path(value):
             path_value = str(value or '').strip()
@@ -9050,8 +9065,18 @@ class TaskProcessor:
                 )[0]:
                     return get_task(task_id)
 
+                # Caption acceptance/QC above must precede burned-media reuse.
+                if reusable_embedded_video:
+                    if reusable_embedded_video != video_path:
+                        update_task(task_id, video_path_local=reusable_embedded_video)
+                    task_logger.info("字幕验收通过，复用已有带字幕视频")
+                    return get_task(task_id)
+
+                embed_source = self._get_original_video_for_reembed(task_id, video_path, task_logger)
+                if not embed_source:
+                    return None
                 embedded_video_path = self._embed_subtitle_in_video(
-                    task_id, video_path, subtitle_path_translated, task_logger
+                    task_id, embed_source, subtitle_path_translated, task_logger
                 )
                 if embedded_video_path:
                     update_task(
@@ -9077,8 +9102,17 @@ class TaskProcessor:
                 )[0]:
                     return get_task(task_id)
 
+                if reusable_embedded_video:
+                    if reusable_embedded_video != video_path:
+                        update_task(task_id, video_path_local=reusable_embedded_video)
+                    task_logger.info("源字幕验收通过，复用已有带字幕视频")
+                    return get_task(task_id)
+
+                embed_source = self._get_original_video_for_reembed(task_id, video_path, task_logger)
+                if not embed_source:
+                    return None
                 embedded_video_path = self._embed_subtitle_in_video(
-                    task_id, video_path, subtitle_path_original, task_logger
+                    task_id, embed_source, subtitle_path_original, task_logger
                 )
                 if embedded_video_path:
                     update_task(
