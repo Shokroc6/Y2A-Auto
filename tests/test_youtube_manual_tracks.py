@@ -19,6 +19,11 @@ def track(name='English - CC (English)', url='https://example.org/caption'):
 
 
 class ManualTrackTests(unittest.TestCase):
+    def setUp(self):
+        previous_disable = logging.root.manager.disable
+        logging.disable(logging.NOTSET)
+        self.addCleanup(logging.disable, previous_disable)
+
     def run_download(self, info, config=None, existing=True, only_video=True):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp) / 'downloads' / 'sample'
@@ -28,6 +33,8 @@ class ManualTrackTests(unittest.TestCase):
             commands = []
             log = logging.getLogger('manual-track-test')
             def run(cmd, **kwargs):
+                if not isinstance(cmd, list) or cmd[:3] != ['python', '-m', 'yt_dlp']:
+                    return subprocess.CompletedProcess(cmd, 0, '', '')
                 commands.append(cmd[:])
                 (directory / 'video.mp4').write_bytes(b'offline-video-boundary')
                 if '--sub-langs' in cmd:
