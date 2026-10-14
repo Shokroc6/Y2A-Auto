@@ -259,7 +259,9 @@ class SrtTransformEngine:
                 pending_texts.clear()
             cues.append({
                 'start': max(0.0, start_s),
-                'end': max(end_s, start_s + _MIN_VISIBLE_DUR_S),
+                # Parsing preserves valid authored timing; display-duration policy
+                # belongs to explicit transforms, not the source reader.
+                'end': end_s,
                 'text': content,
                 'timing_source': 'srt',
                 'alignment_confidence': 0.45,

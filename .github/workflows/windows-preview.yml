@@ -92,7 +92,7 @@ jobs:
         run: python -c "import shutil; assert shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg must be on PATH'"
 
       - name: Run offline bilingual regressions
-        run: python tools/run_offline_tests.py test_bilingual test_bilingual_vtt test_subtitle_translator_pairing test_offline_runner test_windows_preview test_upload_copyright_type test_description_preservation test_bundled_subtitle_fonts test_frozen_font_resolution test_platform_metadata_limits test_subtitle_upload_recovery test_subtitle_burn_idempotency.SubtitleBurnIdempotencyTests test_portable_update_transaction
+        run: python tools/run_offline_tests.py test_youtube_manual_tracks test_ass_source_timing test_bilingual test_bilingual_vtt test_subtitle_translator_pairing test_offline_runner test_windows_preview test_upload_copyright_type test_description_preservation test_bundled_subtitle_fonts test_frozen_font_resolution test_platform_metadata_limits test_subtitle_upload_recovery test_subtitle_burn_idempotency.SubtitleBurnIdempotencyTests test_portable_update_transaction
 
       - name: Run native Windows portable transaction rollback sandbox
         shell: powershell

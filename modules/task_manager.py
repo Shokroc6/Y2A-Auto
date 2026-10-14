@@ -7089,10 +7089,16 @@ class TaskProcessor:
                 font_override_count += 1
             if wrap_meta.get('overflow_warning'):
                 overflow_warning_count += 1
+            # ASS has centisecond precision. Skip intervals that collapse
+            # after quantization instead of inventing time across a next cue.
+            start_timestamp = cls._seconds_to_ass_timestamp(cue_dict.get('start', 0.0))
+            end_timestamp = cls._seconds_to_ass_timestamp(cue_dict.get('end', 0.0))
+            if start_timestamp == end_timestamp:
+                continue
             ass_lines.append(
                 "Dialogue: 0,"
-                f"{cls._seconds_to_ass_timestamp(cue_dict.get('start', 0.0))},"
-                f"{cls._seconds_to_ass_timestamp(cue_dict.get('end', 0.0))},"
+                f"{start_timestamp},"
+                f"{end_timestamp},"
                 "Default,,0,0,0,,"
                 f"{text}"
             )

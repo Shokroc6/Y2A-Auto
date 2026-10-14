@@ -311,10 +311,32 @@ def _set_yt_dlp_format_options(
         cmd.extend(['--merge-output-format', merge_output_format])
 
 
+def _select_source_subtitle(config: dict[str, Any], info: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Prefer one non-translated manual language-family key, then opted-in auto."""
+    source = str(config.get('SUBTITLE_SOURCE_LANGUAGE', 'auto') or 'auto')
+    source = 'en' if source == 'auto' else source
+    base = source.split('-', 1)[0]
+    categories = ['subtitles']
+    if config.get('YOUTUBE_AUTO_GENERATED_SUBTITLES_ENABLED', False):
+        categories.append('automatic_captions')
+    for category in categories:
+        tracks = info.get(category) or {}
+        keys = [key for key, formats in tracks.items()
+                if (key == base or key.startswith(base + '-')) and formats
+                and not any('tlang' in parse_qs(urlparse(f.get('url', '')).query)
+                            for f in formats)]
+        if keys:
+            key = min(keys, key=lambda k: (k != source, k != base, k))
+            return ('manual' if category == 'subtitles' else 'automatic',
+                    key, str(tracks[key][0].get('name') or ''))
+    return None
+
+
 def _build_subtitle_download_args(
     config: dict[str, Any] | None,
     *,
     include_subtitles: bool,
+    info: dict[str, Any] | None = None,
 ) -> list[str]:
     if not include_subtitles:
         return ['--no-write-subs']
@@ -324,10 +346,13 @@ def _build_subtitle_download_args(
         source = str(config.get('SUBTITLE_SOURCE_LANGUAGE', 'auto') or 'auto')
         if source == 'auto':
             source = 'en'
-        # yt-dlp prefers a manual track over an automatic track of the SAME
-        # language key. Select one exact language, not all language variants.
-        args = ['--write-subs', '--sub-langs', source, '--convert-subs', 'srt']
-        if config.get('YOUTUBE_AUTO_GENERATED_SUBTITLES_ENABLED', False):
+        selected = _select_source_subtitle(config, info) if info is not None else None
+        if info is not None and selected is None:
+            return ['--no-write-subs']
+        key = selected[1] if selected else source
+        args = ['--write-subs', '--sub-langs', re.escape(key), '--convert-subs', 'srt']
+        if (selected and selected[0] == 'automatic') or (
+                info is None and config.get('YOUTUBE_AUTO_GENERATED_SUBTITLES_ENABLED', False)):
             args.append('--write-auto-subs')
         return args
 
@@ -640,7 +665,7 @@ def test_video_availability(youtube_url, yt_dlp_cmd, cookies_path=None, logger=N
         '--no-warnings',
         '--no-playlist',
         '--ignore-no-formats-error',
-        '--print', '%(id)s\t%(title)s'
+        '--dump-single-json'
     ]
     
     # 检查是否需要使用代理
@@ -847,6 +872,29 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                 has_ffmpeg,
             )
         
+        subtitle_info = None
+        selected_subtitle = None
+        if not skip_download and config.get('SUBTITLE_BILINGUAL_ENABLED') and config.get('SUBTITLE_TRANSLATION_ENABLED'):
+            # Reuse collected metadata; fresh preflight JSON covers first/full downloads.
+            if only_video and os.path.isfile(metadata_output):
+                try:
+                    with open(metadata_output, encoding='utf-8') as metadata_file:
+                        subtitle_info = json.load(metadata_file)
+                except (OSError, ValueError):
+                    pass
+            if not isinstance(subtitle_info, dict):
+                try:
+                    subtitle_info = json.loads(formats_info or '{}')
+                except ValueError:
+                    subtitle_info = {}
+            if not isinstance(subtitle_info, dict):
+                subtitle_info = {}
+            selected_subtitle = _select_source_subtitle(config, subtitle_info)
+            if selected_subtitle:
+                logger.info('Subtitle source category=%s key=%s name=%s', *selected_subtitle)
+            else:
+                logger.info('Subtitle source not found; caption download skipped')
+
         # 根据参数调整命令（不再进行缩略图格式转换，直接使用原生格式）
         if skip_download:
             # “采集信息”阶段当前只依赖 metadata + cover；
@@ -870,6 +918,7 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
             cmd.extend(_build_subtitle_download_args(
                 config,
                 include_subtitles=subtitle_download_enabled,
+                info=subtitle_info,
             ))
         else:
             # 默认全下载
@@ -877,7 +926,7 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                 '--write-info-json',
                 '--write-thumbnail',
             ])
-            cmd.extend(_build_subtitle_download_args(config, include_subtitles=True))
+            cmd.extend(_build_subtitle_download_args(config, include_subtitles=True, info=subtitle_info))
 
         # 传入 ffmpeg 位置（若检测到本地路径；在 Docker 中让 yt-dlp 走 PATH）
         if ffmpeg_location and os.path.isabs(ffmpeg_location):
@@ -1197,6 +1246,13 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                     elif file.startswith('video.') and ('.vtt' in file or '.srt' in file):
                         subtitles_paths.append(file_path)
             
+            if selected_subtitle:
+                key = selected_subtitle[1]
+                downloaded = any(os.path.basename(p) in (f'video.{key}.srt', f'video.{key}.vtt')
+                                 and os.path.getsize(p) > 0 for p in subtitles_paths)
+                logger.info('Subtitle source category=%s key=%s name=%s receipt=%s',
+                            *selected_subtitle, 'downloaded' if downloaded else 'not-found')
+
             # 重命名metadata文件
             if metadata_path and os.path.exists(metadata_path):
                 shutil.copy(metadata_path, metadata_output)
