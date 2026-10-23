@@ -215,6 +215,7 @@ python app.py
 - `YOUTUBE_COOKIES_PATH`：YouTube Cookie 路径
 - `ACFUN_COOKIES_PATH`：AcFun Cookie 路径
 - `BILIBILI_COOKIES_PATH`：bilibili Cookie 路径
+- `BILIBILI_SUBMIT_API`：bilibili 投稿接口，`auto`（默认，优先必剪 PC 接口，失败回退 Web）/ `bcut_pc` / `web`（手改成 `bcut` 等别名也会被归一化后再保存）
 - `YOUTUBE_PROXY_ENABLED` / `YOUTUBE_PROXY_URL`：YouTube 下载代理
 - `YOUTUBE_API_PROXY_ENABLED` / `YOUTUBE_API_PROXY_URL`：YouTube 监控 API 独立代理，不继承下载代理
 - `YOUTUBE_DOWNLOAD_THREADS`：下载线程数
@@ -236,7 +237,7 @@ python app.py
 ### AI 与投稿
 
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL_NAME`：全局 AI 配置
-- `OPENAI_THINKING_ENABLED`：是否允许模型使用思考模式；关闭时按可识别的 DeepSeek、Qwen、MiMo 接口发送各自的私有禁用参数
+- `OPENAI_THINKING_ENABLED`：是否允许模型使用思考模式；关闭时优先发送厂商文档中的原生开关（DeepSeek Chat 用 `thinking`、Responses 用 `reasoning.effort=none`；Qwen Chat/Responses 用 `enable_thinking`；MiMo Chat 用 `thinking`、Responses 用 `reasoning.effort=none`）。原生开关被端点以 400/422 拒绝时，会在同一请求内再尝试标准 `reasoning_effort=none` / `reasoning.effort=none`，全部形态都失败才移除控制并记录 warning；此时模型可能恢复默认思考行为。第三方网关上的 DeepSeek/Ling/混元没有可靠原生开关，先尝试标准参数，再尝试通用 `thinking` 对象。通过反向代理访问官方端点时无法从域名识别厂商，会按第三方顺序逐个尝试，但不会因此跳过关闭思考的尝试。OpenAI o 系列 / GPT-5 等推理模型各代支持的 `reasoning_effort` 取值不同，本开关不会自动改写，需在模型网关侧控制
 - `SUBTITLE_OPENAI_*`：字幕翻译专用覆盖配置，留空则回退全局
 - `SUBTITLE_QC_*`：字幕质检专用覆盖配置，留空则回退字幕翻译 / 全局配置
 - `TRANSLATE_TITLE` / `TRANSLATE_DESCRIPTION` / `GENERATE_TAGS`：自动生成标题、简介、标签
@@ -245,7 +246,7 @@ python app.py
 - `YOUTUBE_UPLOADER_AS_FIRST_TAG`：将上传者作为首标签
 - `PRESET_TAGS_ENABLED` / `PRESET_TAGS`：预设标签，每行一个（也接受逗号、顿号、分号分隔）。启用后预设标签排在任务标签之前，`GENERATE_TAGS` 开启时 AI 只补齐剩余名额；一份预设同时服务 AcFun（前 6 个、每个约 10 字）与 bilibili（最多 12 个、每个 20 字）
 
-AI 文本功能同时兼容 OpenAI Chat Completions 与 Responses API。`OPENAI_BASE_URL` 可填写 API 根地址（例如 `https://api.openai.com/v1`，默认使用 Chat Completions）或完整的 `/chat/completions`、`/responses` 地址；填写完整端点时会自动选择协议并规范化。Responses 请求会自动转换消息、JSON 输出格式和 token 上限参数，返回值也会归一化供翻译、质检、智能分段等现有功能使用。当兼容服务不支持 `response_format`、token 上限参数、自定义 `temperature` 或特定指令角色时，系统会根据端点实际错误逐级协商；若网关只返回笼统的请求 schema 错误，则降级为仅含 `model + user messages` 的最小标准请求。能力只在降级请求成功后按端点、协议和模型缓存。
+AI 文本功能同时兼容 OpenAI Chat Completions 与 Responses API。`OPENAI_BASE_URL` 可填写 API 根地址（例如 `https://api.openai.com/v1`，默认使用 Chat Completions）或完整的 `/chat/completions`、`/responses` 地址；填写完整端点时会自动选择协议并规范化。Responses 请求会自动转换消息、JSON 输出格式、思考开关和 token 上限参数，返回值也会归一化供翻译、质检、智能分段等现有功能使用。当兼容服务不支持 `response_format`、token 上限参数、自定义 `temperature` 或特定指令角色时，系统会根据端点实际错误逐级协商；若网关只返回笼统的请求 schema 错误，则降级为仅含 `model + user messages` 的最小标准请求。能力只在降级请求成功后按端点、协议和模型缓存。
 
 ### 字幕处理
 
@@ -550,6 +551,7 @@ ssh -N -L 5000:127.0.0.1:5000 -o ServerAliveInterval=30 user@<服务器公网IP>
   - 检查人工审核页元信息是否合规
 - 上传 bilibili 失败
   - 更新 `cookies/bili_cookies.json`，或在设置页使用 QR 码重新扫码登录
+  - 报 603「系统检测到异常行为」属于账号级风控：默认的 `auto` 投稿接口会先走必剪 PC 接口，失败再回退 Web；两条通道都被拦截时，请先用浏览器登录同一账号在创作中心手动投稿一次，或按提示完成实名/客服申诉，并保持出口 IP 稳定、降低投稿频率
 - 字幕翻译慢
   - 调整并发与批量大小，同时注意 API 限速
 - Docker 未启用 NVENC

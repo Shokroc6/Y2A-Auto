@@ -99,7 +99,7 @@ jobs:
         run: ./tools/test_portable_update_sandbox.ps1
 
       - name: Run maintenance regressions
-        run: python -m pytest tests/test_description_budget.py tests/test_subtitle_failure_policy.py tests/test_subtitle_strict_default.py tests/test_bilibili_uploader.py
+        run: python -m pytest tests/test_description_budget.py tests/test_subtitle_failure_policy.py tests/test_subtitle_strict_default.py tests/test_bilibili_uploader.py tests/test_bilibili_buvid.py tests/test_bilibili_submit_api.py tests/test_bilibili_submit_api_config.py tests/test_bilibili_submit_api_badge.py tests/test_upstream_4110_merge.py
 
       - name: Build Windows EXE using upstream packager
         working-directory: build-tools

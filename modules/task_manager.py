@@ -9950,7 +9950,10 @@ class TaskProcessor:
             return
 
         try:
-            uploader = BilibiliUploader(cookie_file=bilibili_cookies_path)
+            uploader = BilibiliUploader(
+                cookie_file=bilibili_cookies_path,
+                submit_api=self.config.get('BILIBILI_SUBMIT_API', 'auto'),
+            )
             last_progress_text = '0.0%'
 
             def _normalize_progress_text(progress_text):
