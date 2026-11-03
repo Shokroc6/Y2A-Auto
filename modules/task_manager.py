@@ -3531,6 +3531,41 @@ class TaskProcessor:
         )
         return False
     
+    def _deroll_youtube_auto_source(self, task_dir, subtitle_file, task_logger):
+        """仅对 YouTube 自动字幕源：把滚动窗口改写为不重复的单行 cue，原文件留 .rolling 备份。"""
+        metadata_path = os.path.join(task_dir, 'metadata.json')
+        if not os.path.isfile(metadata_path):
+            return  # Non-YouTube / ASR tasks: unchanged.
+        try:
+            with open(metadata_path, encoding='utf-8') as metadata_file:
+                info = json.load(metadata_file)
+            from modules.youtube_handler import _select_source_subtitle
+            selected = _select_source_subtitle(self.config, info) if isinstance(info, dict) else None
+            if not selected or selected[0] != 'automatic' or os.path.basename(subtitle_file) not in (
+                    f'video.{selected[1]}.srt', f'video.{selected[1]}.vtt'):
+                return
+            from modules.subtitle_translator import SubtitleReader, SubtitleWriter, deroll_auto_captions
+            is_vtt = subtitle_file.lower().endswith('.vtt')
+            items = (SubtitleReader.read_vtt if is_vtt else SubtitleReader.read_srt)(subtitle_file, preserve_lines=True)
+            derolled = deroll_auto_captions(items)
+            if derolled is items:
+                return
+            if is_vtt:  # read_vtt decodes entities once; keep the rewrite lossless.
+                for item in derolled:
+                    item.source_text = html.escape(item.source_text, quote=False)
+            backup = subtitle_file + '.rolling'
+            if not os.path.exists(backup):
+                shutil.copy2(subtitle_file, backup)
+            temp_path = subtitle_file + '.tmp'
+            if (SubtitleWriter.write_vtt if is_vtt else SubtitleWriter.write_srt)(derolled, temp_path, translated=False):
+                os.replace(temp_path, subtitle_file)
+                task_logger.info('YouTube 自动字幕去滚动: %d -> %d 条（原文件备份 %s）',
+                                 len(items), len(derolled), os.path.basename(backup))
+            elif os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception as exc:
+            task_logger.warning(f'YouTube 自动字幕去滚动跳过: {type(exc).__name__}')
+
     def _translate_subtitle(self, task_id, task_logger, embed_in_video_override=None):
         """翻译字幕文件"""
         task = get_task(task_id)
@@ -3954,6 +3989,8 @@ class TaskProcessor:
             # 没有中文：优先选择英文，否则退回第一个文件
             subtitle_file = en_candidates[0] if en_candidates else subtitle_files[0]
             task_logger.info(f"找到字幕文件: {os.path.basename(subtitle_file)}")
+            if bilingual:
+                self._deroll_youtube_auto_source(task_dir, subtitle_file, task_logger)
             subtitle_lang = self._detect_subtitle_language(subtitle_file)
             task_logger.info(f"检测到字幕语言: {subtitle_lang}")
             if en_candidates and subtitle_file in en_candidates:

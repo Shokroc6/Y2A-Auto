@@ -618,6 +618,31 @@ class SubtitleReader:
             logger.error(f"读取VTT文件失败: {type(e).__name__}")
             return []
 
+def deroll_auto_captions(items: List[SubtitleItem]) -> List[SubtitleItem]:
+    """YouTube 自动字幕滚动窗口（上一条末行=下一条首行）→ 每条只保留新出现的一行。
+
+    新行从出现时开始，持续到被下一条新行替换（吸收 10ms 过渡条）；空条丢弃。
+    未呈现滚动特征（多数相邻条首尾相接）时原样返回，因此已处理过的文件不会再变。
+    """
+    windows = [(item, [line.strip() for line in item.source_text.split('\n') if line.strip()])
+               for item in items]
+    windows = [(item, lines) for item, lines in windows if lines]
+    rolls = sum(1 for (_, a), (_, b) in zip(windows, windows[1:]) if a[-1] == b[0])
+    if rolls * 2 <= len(windows) - 1:
+        return items
+    out: List[SubtitleItem] = []
+    bottom = None
+    for item, lines in windows:
+        new_lines = lines[1:] if lines[0] == bottom else lines
+        bottom = lines[-1]
+        if new_lines:
+            out.append(SubtitleItem(index=len(out) + 1, start_time=item.start_time,
+                                    end_time=item.end_time, source_text='\n'.join(new_lines)))
+        elif out:
+            out[-1].end_time = item.end_time
+    return out
+
+
 class SubtitleWriter:
     """字幕文件输出器"""
 
