@@ -2017,7 +2017,10 @@ def archive_translation_failure(output_path):
     marker = Path(str(output_path) + '.translation-failed.json')
     if marker.exists():
         import uuid
-        marker.rename(Path(str(output_path) + '.translation-history-' + uuid.uuid4().hex + '.json'))
+        try:
+            marker.rename(Path(str(output_path) + '.translation-history-' + uuid.uuid4().hex + '.json'))
+        except OSError as exc:
+            logger.warning(f"归档翻译失败诊断失败，保留原诊断文件: {type(exc).__name__}")
 
 
 # 工厂函数

@@ -925,6 +925,8 @@ def _is_subtitle_stage_rejected(task, config=None) -> bool:
     """
     if not task:
         return False
+    if task.get('error_category') == 'subtitle_translation_failed':
+        return True
     if config is None:
         return _subtitle_rejection_recorded_on_task(task)
     return not _subtitle_embed_allowed(
@@ -3889,7 +3891,7 @@ class TaskProcessor:
 
                 if should_embed_subtitle and _embed_guard(subtitle_file, asr_artifact=asr_generated) and _ensure_asr_qc(subtitle_file):
                     embedded_video_path = self._embed_subtitle_in_video(
-                        task_id, task['video_path_local'], subtitle_file, task_logger
+                        task_id, self._get_original_video_for_reembed(task_id, task['video_path_local'], task_logger), subtitle_file, task_logger
                     )
                     if embedded_video_path:
                         update_task(
@@ -3942,7 +3944,7 @@ class TaskProcessor:
 
                 if should_embed_subtitle and _embed_guard(subtitle_file, asr_artifact=asr_generated) and _ensure_asr_qc(subtitle_file):
                     embedded_video_path = self._embed_subtitle_in_video(
-                        task_id, task['video_path_local'], subtitle_file, task_logger
+                        task_id, self._get_original_video_for_reembed(task_id, task['video_path_local'], task_logger), subtitle_file, task_logger
                     )
                     if embedded_video_path:
                         update_task(
@@ -4054,7 +4056,7 @@ class TaskProcessor:
                     and _ensure_asr_qc(subtitle_file)
                 ):
                     embedded_video_path = self._embed_subtitle_in_video(
-                        task_id, task['video_path_local'], 
+                        task_id, self._get_original_video_for_reembed(task_id, task['video_path_local'], task_logger),
                         translated_subtitle_path, task_logger
                     )
                     if embedded_video_path:
@@ -9080,6 +9082,7 @@ class TaskProcessor:
                             allow_partial=_as_bool(self.config.get('SUBTITLE_TRANSLATION_ALLOW_PARTIAL', False))):
                         accepted = False
                     if not accepted:
+                        os.replace(subtitle_path_translated, subtitle_path_translated + '.rejected')
                         update_task(task_id, status=TASK_STATES['FAILED'], error_category='subtitle_translation_failed',
                                     error_message='缓存译文未通过源文配对/翻译验收，已停止上传；保留原文件，请重新处理字幕。', upload_progress=None)
                         return None
@@ -9339,6 +9342,8 @@ class TaskProcessor:
 
         upload_target = _get_task_upload_target(task)
         pending_platforms = _get_pending_upload_platforms(task, upload_target)
+        if task.get('status') == TASK_STATES['FAILED'] and pending_platforms:
+            update_task(task_id, status=TASK_STATES['UPLOADING'])  # retry; prepare re-validates
         task_logger.info(f"上传分发目标平台: {upload_target}")
         task_logger.info(f"待上传平台: {pending_platforms}")
 

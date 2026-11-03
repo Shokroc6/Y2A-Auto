@@ -1308,6 +1308,7 @@ class VideoUploader(AsyncEvent):
                 retry_delay = min(2 ** (attempt - 1), 8) if retrying else 0
                 failure_data = {
                     **attempt_data,
+                    "max_attempts": attempt_limit,
                     "info": safe_upload_error(err),
                     "err": ApiException(safe_upload_error(err)),
                     "status_code": status_code,

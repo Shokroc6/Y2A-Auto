@@ -21,7 +21,8 @@ def safe_upload_error(error):
 def retryable_chunk_error(error, status_code):
     code = curl_error_code(error)
     if code is not None:
-        return code in {6, 7, 18, 28, 35, 52, 55, 56}
-    if status_code is not None:
+        return code in {6, 7, 16, 18, 28, 35, 52, 55, 56, 92}
+    from modules.bili_sdk.exceptions.NetworkException import NetworkException
+    if isinstance(error, NetworkException):
         return status_code in {408, 429, 500, 502, 503, 504}
-    return isinstance(error, (TimeoutError, ConnectionError, OSError))
+    return True  # Upstream retried every non-HTTP chunk failure (bounded attempts).
