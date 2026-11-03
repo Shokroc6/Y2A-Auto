@@ -619,7 +619,7 @@ class SubtitleReader:
             return []
 
 def deroll_auto_captions(items: List[SubtitleItem]) -> List[SubtitleItem]:
-    """YouTube 自动字幕滚动窗口（上一条末行=下一条首行）→ 每条只保留新出现的一行。
+    """YouTube 自动字幕滚动窗口（上一条末行=下一条首行）→ 只保留新出现的行，每两行相邻新行合成一条。
 
     新行从出现时开始，持续到被下一条新行替换（吸收 10ms 过渡条）；空条丢弃。
     未呈现滚动特征（多数相邻条首尾相接）时原样返回，因此已处理过的文件不会再变。
@@ -640,7 +640,23 @@ def deroll_auto_captions(items: List[SubtitleItem]) -> List[SubtitleItem]:
                                     end_time=item.end_time, source_text='\n'.join(new_lines)))
         elif out:
             out[-1].end_time = item.end_time
-    return out
+    # 每屏两行相邻新行（1+2、3+4…，不重复），空格连成一句交给 AI；间隔 >1.5s 或末尾落单则单独成条。
+    def ms(t):
+        h, m, s = t.replace(',', '.').split(':')
+        return (int(h) * 3600 + int(m) * 60 + float(s)) * 1000
+    paired: List[SubtitleItem] = []
+    i = 0
+    while i < len(out):
+        first = out[i]
+        second = out[i + 1] if i + 1 < len(out) else None
+        if second and ms(second.start_time) - ms(first.end_time) <= 1500:
+            first = SubtitleItem(index=0, start_time=first.start_time, end_time=second.end_time,
+                                 source_text=f'{first.source_text} {second.source_text}')
+            i += 1
+        first.index = len(paired) + 1
+        paired.append(first)
+        i += 1
+    return paired
 
 
 class SubtitleWriter:

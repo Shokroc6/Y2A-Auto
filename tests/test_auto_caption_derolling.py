@@ -25,11 +25,11 @@ ROLLING_CUES = [
     ('00:00:14,000', '00:00:14,010', '[Music]\n '),
     ('00:01:00,000', '00:01:02,500', ' \nAfter the music'),
 ]
+SINGLE_LINES = ['First line here', 'second line, 42', 'third line', 'third line', '[Music]', 'After the music']
+# Two adjacent new lines per screen, no repetition; a >1.5s silence or the last odd line stays single.
 EXPECTED = [
-    ('00:00:00,240', '00:00:02,159', 'First line here'),
-    ('00:00:02,159', '00:00:04,160', 'second line, 42'),
-    ('00:00:04,160', '00:00:06,160', 'third line'),
-    ('00:00:06,160', '00:00:08,010', 'third line'),
+    ('00:00:00,240', '00:00:04,160', 'First line here second line, 42'),
+    ('00:00:04,160', '00:00:08,010', 'third line third line'),
     ('00:00:12,000', '00:00:14,010', '[Music]'),
     ('00:01:00,000', '00:01:02,500', 'After the music'),
 ]
@@ -63,7 +63,7 @@ def _collapse(lines):
 
 
 class DerollFunctionTests(unittest.TestCase):
-    def test_rolling_window_becomes_one_new_line_per_cue(self):
+    def test_rolling_window_becomes_two_adjacent_new_lines_per_cue(self):
         out = deroll_auto_captions(_items(ROLLING_CUES))
         self.assertEqual([(x.start_time, x.end_time, x.source_text) for x in out], EXPECTED)
         self.assertEqual([x.index for x in out], list(range(1, len(EXPECTED) + 1)))
@@ -72,8 +72,8 @@ class DerollFunctionTests(unittest.TestCase):
         source = _items(ROLLING_CUES)
         out = deroll_auto_captions(source)
         # Every source line survives, in order (only window repetition removed).
-        self.assertEqual(_collapse(_lines(out)), _collapse(_lines(source)))
-        self.assertEqual(_lines(out), [t for _, _, t in EXPECTED])
+        self.assertEqual(_collapse(SINGLE_LINES), _collapse(_lines(source)))
+        self.assertEqual(' '.join(_lines(out)).split(), ' '.join(SINGLE_LINES).split())
         self.assertTrue(all(len(x.source_text.split('\n')) == 1 for x in out))
 
     def test_non_rolling_track_is_returned_unchanged(self):
@@ -142,8 +142,8 @@ class DerollTaskPathTests(unittest.TestCase):
             cues = ROLLING_CUES[:4] + [('00:00:04,160', '00:00:06,150', 'second line, 42\nfish &amp; chips &lt;b&gt;')]
             meta = {'subtitles': {}, 'automatic_captions': {'en-orig': [{'ext': 'srv1'}]}}
             source, sent, paired, _ = self.run_task(directory, 'video.en-orig.vtt', _vtt(cues), meta)
-            self.assertEqual(sent, ['First line here', 'second line, 42', 'fish & chips <b>'])
-            self.assertEqual(len(paired), 3)
+            self.assertEqual(sent, ['First line here second line, 42', 'fish & chips <b>'])
+            self.assertEqual(len(paired), 2)
             self.assertEqual([x.source_text for x in SubtitleReader.read_vtt(str(source), preserve_lines=True)], sent)
 
     def test_manual_track_is_byte_identical_and_untouched(self):
