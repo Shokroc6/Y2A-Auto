@@ -26,5 +26,19 @@
         "probe_version": 20221109,
         "query": "upcdn=ws&probe_version=20221109",
         "probe_url": "//upos-cs-upcdnws.bilivideo.com/OK"
+    },
+    "txa": {
+        "os": "upos",
+        "upcdn": "txa",
+        "probe_version": 20221109,
+        "query": "upcdn=txa&probe_version=20221109",
+        "probe_url": "//upos-cs-upcdntxa.bilivideo.com/OK"
+    },
+    "alia": {
+        "os": "upos",
+        "upcdn": "alia",
+        "probe_version": 20221109,
+        "query": "upcdn=alia&probe_version=20221109",
+        "probe_url": "//upos-cs-upcdnalia.bilivideo.com/OK"
     }
 }

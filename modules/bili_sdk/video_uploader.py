@@ -169,12 +169,16 @@ class Lines(Enum):
     + QN：七牛
     + WS：网宿
     + BLDSA：bldsa
+    + TXA：腾讯云海外
+    + ALIA：阿里云海外
     """
 
     BDA2 = "bda2"
     QN = "qn"
     WS = "ws"
     BLDSA = "bldsa"
+    TXA = "txa"
+    ALIA = "alia"
 
 
 with open(
@@ -1149,7 +1153,10 @@ class VideoUploader(AsyncEvent):
             str: 分 P 文件 ID，用于 submit 时的 $.videos[n].filename 字段使用。
         """
         preupload = await self._preupload(page)
-        self.dispatch(VideoUploaderEvents.PRE_PAGE.value, {"page": page})
+        self.dispatch(
+            VideoUploaderEvents.PRE_PAGE.value,
+            {"page": page, "endpoint": preupload.get("endpoint")},
+        )
 
         page_size = page.get_size()
         # 所有分块起始位置

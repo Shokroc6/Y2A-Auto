@@ -420,6 +420,15 @@ class BilibiliUploader:
                 except Exception:
                     pass
 
+            @uploader.on(video_uploader.VideoUploaderEvents.PRE_PAGE.value)
+            def on_pre_page(data):
+                line = uploader.line if isinstance(uploader.line, dict) else {}
+                endpoint = str(data.get("endpoint") or "") if isinstance(data, dict) else ""
+                host = endpoint.lstrip("/").split("/", 1)[0] or "未知"
+                self.log(
+                    f"Bilibili {_page_label(data)} 上传线路：{line.get('upcdn') or '未知'}（{host}）"
+                )
+
             @uploader.on(video_uploader.VideoUploaderEvents.CHUNK_FAILED.value)
             def on_chunk_failed(data):
                 if not isinstance(data, dict):
