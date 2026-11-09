@@ -47,6 +47,17 @@ SUBMIT_RISK_ERROR_CODES = frozenset({603, -352, -412, 412})
 # 这些 code 换通道也没意义（登录态/CSRF 已失效、投稿频率超限），不做回退。
 SUBMIT_NO_FALLBACK_CODES = frozenset({-101, -111, 137022})
 
+# Fork: the global 30 s request timeout is too short for ~10 MB chunk PUTs on
+# slow upload lines. Only the chunk PUT gets a size-scaled timeout.
+CHUNK_PUT_MIN_BYTES_PER_SECOND = 64 * 1024
+CHUNK_PUT_MAX_TIMEOUT_SECONDS = 600.0
+
+
+def _chunk_put_timeout(chunk_bytes: int) -> float:
+    base = float(request_settings.get_timeout() or 0)
+    scaled = min(chunk_bytes / CHUNK_PUT_MIN_BYTES_PER_SECOND, CHUNK_PUT_MAX_TIMEOUT_SECONDS)
+    return max(base, scaled)
+
 _SUBMIT_API_ALIASES = {
     "": SUBMIT_API_AUTO,
     "auto": SUBMIT_API_AUTO,
@@ -1284,6 +1295,7 @@ class VideoUploader(AsyncEvent):
                     data=chunk,  # type: ignore
                     params=params,
                     headers={"x-upos-auth": preupload["auth"]},
+                    timeout=_chunk_put_timeout(real_chunk_size),
                 )
                 status_code = resp.code
                 if status_code >= 400:

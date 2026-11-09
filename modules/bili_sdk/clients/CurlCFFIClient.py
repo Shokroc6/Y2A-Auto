@@ -108,6 +108,7 @@ class CurlCFFIClient(BiliAPIClient):
         headers: dict = {},
         cookies: dict = {},
         allow_redirects: bool = True,
+        timeout: Optional[float] = None,
     ) -> BiliAPIResponse:
         if headers.get("User-Agent") and self.__session.impersonate != "":
             headers.pop("User-Agent")
@@ -149,6 +150,8 @@ class CurlCFFIClient(BiliAPIClient):
             cookies=cookies,
             allow_redirects=allow_redirects,
             multipart=multipart,
+            # Fork: per-call override only when given; otherwise the session timeout applies.
+            **({"timeout": timeout} if timeout is not None else {}),
         )
         if multipart:
             multipart.close()

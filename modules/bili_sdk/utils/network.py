@@ -822,6 +822,7 @@ class BiliAPIClient(ABC):
         headers: dict = {},
         cookies: dict = {},
         allow_redirects: bool = True,
+        timeout: Optional[float] = None,
     ) -> BiliAPIResponse:
         """
         进行 HTTP 请求
@@ -835,6 +836,7 @@ class BiliAPIClient(ABC):
             headers (dict, optional): 请求头. Defaults to {}.
             cookies (dict, optional): 请求 Cookies. Defaults to {}.
             allow_redirects (bool, optional): 是否允许重定向. Defaults to True.
+            timeout (float, optional): 本次请求超时（fork：仅分块上传使用），None 时沿用全局设置.
 
         Returns:
             BiliAPIResponse: 响应对象
