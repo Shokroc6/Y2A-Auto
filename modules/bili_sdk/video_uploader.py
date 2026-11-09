@@ -199,21 +199,25 @@ async def _probe() -> dict:
     min_cost, fastest_line = 30, None
     legacy_timeout = request_settings.get_timeout()
     request_settings.set_timeout(30) # 测试时设置为 30
-    for line in LINES_INFO.values():
-        start = time.perf_counter()
-        data = bytes(int(1024 * 0.1 * 1024))  # post 0.1MB
-        client = get_client()
-        try:
-            await client.request(
-                method="POST",
-                url=f'https:{line["probe_url"]}',
-                data=data,
-            )
-            cost_time = time.perf_counter() - start
-        except Exception:
-            cost_time = request_settings.get_timeout()
-        if cost_time < min_cost:
-            min_cost, fastest_line = cost_time, line
+    # 单次 0.1MB 采样噪声大：每条线路测 3 轮取最好成绩，出错的线路不再重测
+    alive = list(LINES_INFO.values())
+    for _ in range(3):
+        for line in list(alive):
+            start = time.perf_counter()
+            data = bytes(int(1024 * 0.1 * 1024))  # post 0.1MB
+            client = get_client()
+            try:
+                await client.request(
+                    method="POST",
+                    url=f'https:{line["probe_url"]}',
+                    data=data,
+                )
+                cost_time = time.perf_counter() - start
+            except Exception:
+                alive.remove(line)
+                continue
+            if cost_time < min_cost:
+                min_cost, fastest_line = cost_time, line
     request_settings.set_timeout(legacy_timeout)
     return fastest_line
 

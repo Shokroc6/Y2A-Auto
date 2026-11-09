@@ -49,6 +49,8 @@ class ProbeTests(unittest.TestCase):
         async def request(method, url, data):
             name = url.split("upcdn", 1)[1].split(".", 1)[0]
             cost = costs.get(name)
+            if isinstance(cost, list):
+                cost = cost.pop(0) if cost else None
             if cost is None:
                 raise OSError("could not resolve host")
             clock[0] += cost
@@ -57,8 +59,8 @@ class ProbeTests(unittest.TestCase):
         with patch("modules.bili_sdk.video_uploader.get_client", return_value=client), \
              patch("modules.bili_sdk.video_uploader.time.perf_counter", side_effect=lambda: clock[0]):
             line = asyncio.run(_probe())
-        probed = {c.kwargs["url"] for c in client.request.await_args_list}
-        return line, probed
+        self.calls = [c.kwargs["url"] for c in client.request.await_args_list]
+        return line, set(self.calls)
 
     def test_probe_tries_overseas_lines_and_picks_fastest(self):
         line, probed = self._probe_with({"bda2": 2.0, "txa": 0.4, "alia": 0.3})
@@ -70,6 +72,20 @@ class ProbeTests(unittest.TestCase):
         line, _ = self._probe_with(
             {"bda2": 0.1, "qn": 0.2, "ws": 0.3, "bldsa": 0.4, "txa": 1.5, "alia": 1.6})
         self.assertEqual(line["upcdn"], "bda2")
+
+
+    def test_probe_uses_each_lines_best_of_three_rounds(self):
+        # One slow 0.1 MB sample on txa must not hand the upload to bda2.
+        line, _ = self._probe_with(
+            {"bda2": [1.8, 1.8, 1.8], "txa": [6.18, 0.4, 0.45], "alia": [9.0, 9.0, 9.0]})
+        self.assertEqual(line["upcdn"], "txa")
+        self.assertEqual(self.calls.count("https://upos-cs-upcdntxa.bilivideo.com/OK"), 3)
+
+    def test_probe_skips_failed_line_in_later_rounds(self):
+        line, _ = self._probe_with({"bda2": [0.5, 0.5, 0.5], "alia": [None]})
+        self.assertEqual(line["upcdn"], "bda2")
+        self.assertEqual(self.calls.count("https://upos-cs-upcdnalia.bilivideo.com/OK"), 1)
+        self.assertEqual(self.calls.count("https://upos-cs-upcdnqn.bilivideo.com/OK"), 1)
 
 
 class PreuploadLineTests(unittest.TestCase):
