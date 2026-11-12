@@ -4909,11 +4909,14 @@ class TaskProcessor:
         return build_audio_params(audio_info)
 
     @staticmethod
-    def _estimate_embed_timeout(video_duration, cpu_codec=None):
+    def _estimate_embed_timeout(video_duration, cpu_codec=None,
+                                video_width=None, video_height=None, video_fps=None):
         """根据视频时长估算 FFmpeg 超时时间（秒）。
 
-        x264 路径的估算与历史完全一致（时长 * 3，超过 30 分钟则 * 2，下限 1800，
-        上限 10800）。x265 路径按 EMBED_TIMEOUT_X265_FACTOR 放大估算与上限：
+        x264 非 4K60 路径与历史完全一致（时长 * 3，超过 30 分钟则 * 2，下限 1800，
+        上限 10800）。明确识别的 CPU 4K60（含 59.94fps）至少按片长 * 12，
+        x264 上限 43200 秒；x265 保留现有 5 倍放大。缺失元数据不扩大预算。
+        x265 路径按 EMBED_TIMEOUT_X265_FACTOR 放大估算与上限：
         libx265 实测比同 preset 的 libx264 慢约 5 倍，沿用 x264 的预算会让长视频
         在编码中途被强杀；而且首轮就把 overall_deadline 用完时，后续降级阶段会被
         「预算已耗尽」直接跳过 —— 连 x265 -> x264 那一级都轮不到。
@@ -4932,11 +4935,30 @@ class TaskProcessor:
         else:
             estimated_time = 3600
 
+        # Only an explicitly identified CPU 4K60 stage gets the larger budget.
+        # Missing/invalid probe metadata keeps the historical policy. 59.94 counts
+        # as 60fps; 4K30 and 1080p60 do not. Keep a finite 12-hour x264 cap.
+        try:
+            from fractions import Fraction
+            is_cpu_4k60 = (
+                cpu_codec in ('x264', 'x265')
+                and float(video_width) * float(video_height) >= 3840 * 2160
+                and min(float(video_width), float(video_height)) >= 2160
+                and 59 <= float(Fraction(str(video_fps))) <= 61
+            )
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            is_cpu_4k60 = False
+        if is_cpu_4k60:
+            estimated_time = max(estimated_time, (video_duration or 3600) * 12)
+
         if normalize_cpu_codec(cpu_codec) == 'x265':
             estimated_time *= EMBED_TIMEOUT_X265_FACTOR
             ceiling = EMBED_TIMEOUT_MAX_SECONDS_X265
         else:
             ceiling = EMBED_TIMEOUT_MAX_SECONDS
+        if is_cpu_4k60:
+            ceiling = max(ceiling, 43200 * (
+                EMBED_TIMEOUT_X265_FACTOR if cpu_codec == 'x265' else 1))
 
         return int(max(EMBED_TIMEOUT_MIN_SECONDS, min(estimated_time, ceiling)))
 
@@ -5045,7 +5067,8 @@ class TaskProcessor:
         return stages
 
     @classmethod
-    def _embed_stage_budget(cls, video_duration, cpu_codec, stage, first_stage_budget):
+    def _embed_stage_budget(cls, video_duration, cpu_codec, stage, first_stage_budget,
+                           video_width=None, video_height=None, video_fps=None):
         """某个降级阶段按其**实际编码器**估算的预算（秒）。
 
         硬编回退到 CPU 时，如果这一级要跑 libx265，就必须拿到 x265 的预算（实测慢
@@ -5061,7 +5084,8 @@ class TaskProcessor:
             # 同编码器关增强重试：沿用首轮预算（调用点已自带 300s 下限，这里再兜一次
             # 让本函数的返回值恒有下限，便于独立校验）。
             return max(300.0, float(first_stage_budget))
-        return max(300.0, float(cls._estimate_embed_timeout(video_duration, codec)))
+        return max(300.0, float(cls._estimate_embed_timeout(
+            video_duration, codec, video_width, video_height, video_fps)))
 
     @staticmethod
     def _drop_same_encoder_stage_after_timeout(retry_stages):
@@ -7904,7 +7928,8 @@ class TaskProcessor:
                 
                 # 设置超时时间（根据视频时长估算）
                 timeout = self._estimate_embed_timeout(
-                    video_duration, cpu_codec if actual_encoder == 'cpu' else None
+                    video_duration, cpu_codec if actual_encoder == 'cpu' else None,
+                    input_width, input_height, stream_info.get('fps')
                 )
                 
                 task_logger.debug(f"设置处理超时时间: {timeout//60} 分钟")
@@ -8158,7 +8183,8 @@ class TaskProcessor:
                 # 一律沿用 x264 预算 —— 长视频会在 x265 编码中途被强杀。
                 def _stage_budget(stage):
                     return self._embed_stage_budget(
-                        video_duration, cpu_codec, stage, first_stage_budget
+                        video_duration, cpu_codec, stage, first_stage_budget,
+                        input_width, input_height, stream_info.get('fps')
                     )
 
                 overall_deadline = embed_started_at + first_stage_budget + sum(
