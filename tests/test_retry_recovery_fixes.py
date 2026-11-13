@@ -182,13 +182,13 @@ class ChunkRetryClassifierTests(unittest.TestCase):
         from modules.upload_errors import retryable_chunk_error
         from modules.bili_sdk.exceptions.ApiException import ApiException
         from modules.bili_sdk.exceptions.NetworkException import NetworkException
-        self.assertTrue(retryable_chunk_error(ApiException('分块上传响应异常'), 200))
-        self.assertTrue(retryable_chunk_error(RuntimeError('client failure'), None))
+        self.assertFalse(retryable_chunk_error(ApiException('分块上传响应异常'), 200))
+        self.assertFalse(retryable_chunk_error(RuntimeError('client failure'), None))
         self.assertTrue(retryable_chunk_error(NetworkException(503, 'x'), 503))
         self.assertFalse(retryable_chunk_error(NetworkException(403, 'x'), 403))
         self.assertFalse(retryable_chunk_error(RuntimeError('curl: (60) certificate'), None))
 
-    def test_bad_put_body_retried_with_effective_limit_logged(self):
+    def test_bad_put_body_stops_without_retry(self):
         from modules.bili_sdk.utils.AsyncEvent import AsyncEvent
         from modules.bili_sdk.video_uploader import VideoUploader, VideoUploaderEvents, VideoUploaderPage
         from modules.bili_sdk.exceptions.ApiException import ApiException
@@ -208,9 +208,10 @@ class ChunkRetryClassifierTests(unittest.TestCase):
                  patch('modules.bili_sdk.video_uploader.asyncio.sleep', new=AsyncMock()):
                 with self.assertRaises(ApiException):
                     asyncio.run(uploader._upload_chunk(VideoUploaderPage(path, 't'), 0, 0, 1, preupload))
-        self.assertEqual(client.request.await_count, 3)
-        self.assertEqual([f['retrying'] for f in failures], [True, True, False])
-        self.assertEqual({f['max_attempts'] for f in failures}, {3})
+        self.assertEqual(client.request.await_count, 1)
+        self.assertEqual([f['retrying'] for f in failures], [False])
+        self.assertEqual({f['max_attempts'] for f in failures}, {6})
+        self.assertEqual(failures[0]['reason'], 'permanent')
 
 
 if __name__ == '__main__':

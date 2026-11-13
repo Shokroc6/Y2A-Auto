@@ -10,6 +10,7 @@ import time
 import base64
 import re
 import asyncio
+import random
 from enum import Enum
 from typing import List, Union, Optional
 from copy import copy, deepcopy
@@ -1288,7 +1289,8 @@ class VideoUploader(AsyncEvent):
             "page": page,
         }
 
-        max_attempts = 5  # Timeouts receive two additional bounded PUT attempts.
+        max_attempts = 6
+        deadline = time.monotonic() + 900.0
 
         for attempt in range(1, max_attempts + 1):
             attempt_data = {
@@ -1298,17 +1300,22 @@ class VideoUploader(AsyncEvent):
             }
             self.dispatch(VideoUploaderEvents.PRE_CHUNK.value, attempt_data)
 
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ApiException("分块上传总预算耗尽（deadline_exhausted）")
             status_code = None
+            response_headers = {}
             try:
-                resp = await session.request(
+                resp = await asyncio.wait_for(session.request(
                     method="PUT",
                     url=url,
                     data=chunk,  # type: ignore
                     params=params,
                     headers={"x-upos-auth": preupload["auth"]},
-                    timeout=_chunk_put_timeout(real_chunk_size),
-                )
+                    timeout=min(_chunk_put_timeout(real_chunk_size), remaining),
+                ), timeout=remaining)
                 status_code = resp.code
+                response_headers = getattr(resp, 'headers', {})
                 if status_code >= 400:
                     raise NetworkException(status_code, "上传视频分块失败")
 
@@ -1324,17 +1331,34 @@ class VideoUploader(AsyncEvent):
             except CancelledError:
                 raise
             except Exception as err:
-                from modules.upload_errors import retryable_chunk_error, safe_upload_error, curl_error_code
-                attempt_limit = 5 if curl_error_code(err) == 28 or isinstance(err, TimeoutError) else 3
+                from modules.upload_errors import retryable_chunk_error, curl_error_code
                 retryable = retryable_chunk_error(err, status_code)
-                retrying = retryable and attempt < attempt_limit
-                retry_delay = min(2 ** (attempt - 1), 8) if retrying else 0
+                retrying = retryable and attempt < max_attempts
+                ceiling = min(5 * 2 ** (attempt - 1), 60)
+                retry_delay = random.uniform(ceiling / 2, ceiling) if retrying else 0
+                reason = 'retry' if retrying else ('attempts_exhausted' if retryable else 'permanent')
+                # Retry-After belongs only to this PUT response, not the global client.
+                if retrying:
+                    from email.utils import parsedate_to_datetime
+                    value = next((str(v).strip() for k, v in response_headers.items()
+                                  if str(k).lower() == 'retry-after'), '')
+                    try:
+                        delay = int(value) if re.fullmatch(r'[0-9]+', value) else parsedate_to_datetime(value).timestamp() - time.time()
+                        retry_delay = max(retry_delay, delay)
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+                remaining = max(0.0, deadline - time.monotonic())
+                if retryable and (remaining <= 0 or (retrying and retry_delay >= remaining)):
+                    retrying = False
+                    reason = 'deadline_exhausted'
+                info = (f'HTTP={status_code} curl={curl_error_code(err)} '
+                        f'{type(err).__name__} reason={reason} remaining={remaining:.1f}s')
                 failure_data = {
                     **attempt_data,
-                    "max_attempts": attempt_limit,
-                    "info": safe_upload_error(err),
-                    "err": ApiException(safe_upload_error(err)),
+                    "info": info,
+                    "err": ApiException(info),
                     "status_code": status_code,
+                    "reason": reason,
                     "retrying": retrying,
                     "retry_delay_seconds": retry_delay,
                 }

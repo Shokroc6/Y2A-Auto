@@ -92,11 +92,11 @@ class ChunkPutTimeoutTests(unittest.TestCase):
         self._run_chunk(client, offset=10 * MiB, number=1)
         self.assertEqual(client.request.await_args.kwargs["timeout"], 30.0)
 
-    def test_timeout_retries_unchanged_and_each_attempt_scaled(self):
+    def test_timeout_retries_bounded_and_each_attempt_scaled(self):
         client = Mock(request=AsyncMock(side_effect=TimeoutError("t")))
         with self.assertRaises(TimeoutError):
             self._run_chunk(client)
-        self.assertEqual(client.request.await_count, 5)
+        self.assertEqual(client.request.await_count, 6)
         self.assertEqual({c.kwargs["timeout"] for c in client.request.await_args_list}, {160.0})
 
     def test_complete_page_keeps_global_timeout(self):

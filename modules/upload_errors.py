@@ -3,6 +3,14 @@ import re
 
 
 def curl_error_code(error):
+    try:
+        from curl_cffi import CurlError
+        if isinstance(error, CurlError):
+            code = getattr(error, 'code', None)
+            if isinstance(code, int) and code > 0:
+                return int(code)
+    except ImportError:
+        pass
     match = re.search(r'curl:\s*\((\d+)\)', str(error))
     return int(match.group(1)) if match else None
 
@@ -25,4 +33,4 @@ def retryable_chunk_error(error, status_code):
     from modules.bili_sdk.exceptions.NetworkException import NetworkException
     if isinstance(error, NetworkException):
         return status_code in {408, 429, 500, 502, 503, 504}
-    return True  # Upstream retried every non-HTTP chunk failure (bounded attempts).
+    return isinstance(error, TimeoutError)

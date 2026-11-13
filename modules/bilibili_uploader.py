@@ -52,6 +52,32 @@ def bilibili_submit_api_badge(value: Optional[str]) -> str:
     return BILIBILI_SUBMIT_API_BADGES.get(str(value or "").strip().lower(), "")
 
 
+async def _start_cancellable_upload(uploader, cancel_event=None):
+    """Bridge the existing thread flag into SDK cancellation; own both tasks."""
+    if cancel_event is None:
+        return await uploader.start()
+    if cancel_event.is_set():
+        raise asyncio.CancelledError()
+    upload = asyncio.create_task(uploader.start())
+
+    async def watch():
+        while not cancel_event.is_set():
+            await asyncio.sleep(0.2)
+        upload.cancel()
+
+    watcher = asyncio.create_task(watch())
+    try:
+        result = await upload
+        # start() swallows cancellation and returns None; never discard a response.
+        if result is None and cancel_event.is_set():
+            raise asyncio.CancelledError()
+        return result
+    finally:
+        watcher.cancel()
+        upload.cancel()
+        await asyncio.gather(watcher, upload, return_exceptions=True)
+
+
 def setup_task_logger(task_id):
     log_dir = get_app_subdir("logs")
     os.makedirs(log_dir, exist_ok=True)
@@ -307,6 +333,7 @@ class BilibiliUploader:
         title_limit: int = BILIBILI_TITLE_LIMIT,
         description_limit: int = BILIBILI_DESCRIPTION_LIMIT,
         copyright_type: str = "repost",
+        cancel_event=None,
     ) -> Tuple[bool, Union[dict, str]]:
         self.task_id = task_id
         self.logger = setup_task_logger(task_id or "unknown")
@@ -527,14 +554,14 @@ class BilibiliUploader:
             _emit_progress("0.0%")
             self.log("开始上传到bilibili")
             try:
-                result = asyncio.run(uploader.start())
+                result = asyncio.run(_start_cancellable_upload(uploader, cancel_event))
             except RuntimeError as exc:
                 if 'asyncio.run() cannot be called from a running event loop' not in str(exc):
                     raise
                 # Only event-loop setup failures are safe to rerun, not upload failures.
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    result = pool.submit(asyncio.run, uploader.start()).result()
+                    result = pool.submit(asyncio.run, _start_cancellable_upload(uploader, cancel_event)).result()
 
             _emit_progress("100.0%")
             self.log(f"bilibili上传完成: {result}")
@@ -560,6 +587,9 @@ class BilibiliUploader:
                 "url": video_url,
             }
 
+        except asyncio.CancelledError:
+            self.log("Bilibili上传已取消（cancelled）")
+            return False, "上传已取消"
         except ArgsException as e:
             return False, (
                 "bilibili-api 缺少网络后端依赖，请安装 httpx/aiohttp/curl_cffi。"

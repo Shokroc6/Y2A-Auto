@@ -10061,6 +10061,7 @@ class TaskProcessor:
                 tags=tags,
                 partition_id=partition_id,
                 youtube_url=original_url,
+                cancel_event=get_task_cancel_event(task_id),
                 task_id=task_id,
                 progress_callback=_on_progress,
                 title_limit=effective_limits['title_limit'],

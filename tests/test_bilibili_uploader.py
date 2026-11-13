@@ -25,6 +25,9 @@ class _FakeResponse:
 
 class BilibiliSdkChunkRetryTests(unittest.TestCase):
     def setUp(self):
+        self.jitter = patch('modules.bili_sdk.video_uploader.random.uniform', side_effect=lambda low, high: high)
+        self.jitter.start()
+        self.addCleanup(self.jitter.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.video_path = os.path.join(self.temp_dir.name, "video.mp4")
         with open(self.video_path, "wb") as stream:
@@ -61,8 +64,8 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
         with patch('modules.bili_sdk.video_uploader.get_client', return_value=client), patch('modules.bili_sdk.video_uploader.asyncio.sleep', new=AsyncMock()) as sleep:
             with self.assertRaises(TimeoutError):
                 asyncio.run(self.uploader._upload_chunk(self.page, 0, 0, 1, dict(self.preupload)))
-        self.assertEqual(client.request.await_count, 5)
-        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2, 4, 8])
+        self.assertEqual(client.request.await_count, 6)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [5, 10, 20, 40, 60])
 
     def test_chunk_retries_transient_failures_then_succeeds(self):
         client = Mock()
@@ -97,11 +100,11 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
         self.assertEqual(client.request.await_count, 3)
         self.assertEqual([item["attempt"] for item in failures], [1, 2])
         self.assertEqual([item["retrying"] for item in failures], [True, True])
-        self.assertEqual([item["retry_delay_seconds"] for item in failures], [1, 2])
+        self.assertEqual([item["retry_delay_seconds"] for item in failures], [5, 10])
         self.assertEqual(len(successes), 1)
         self.assertEqual(sleep_mock.await_count, 2)
 
-    def test_chunk_stops_after_three_transient_failures(self):
+    def test_chunk_stops_after_six_transient_failures(self):
         client = Mock()
         client.request = AsyncMock(return_value=_FakeResponse(503))
         failures = []
@@ -121,10 +124,10 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(client.request.await_count, 3)
-        self.assertEqual(len(failures), 3)
+        self.assertEqual(client.request.await_count, 6)
+        self.assertEqual(len(failures), 6)
         self.assertFalse(failures[-1]["retrying"])
-        self.assertEqual(failures[-1]["attempt"], 3)
+        self.assertEqual(failures[-1]["attempt"], 6)
         self.assertEqual(failures[-1]["status_code"], 503)
 
     def test_chunk_does_not_retry_client_error(self):
