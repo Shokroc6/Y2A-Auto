@@ -1103,7 +1103,16 @@ class VideoUploader(AsyncEvent):
 
         cover_url = await self._upload_cover()
 
-        result = await self._submit(videos, cover_url)
+        resume = getattr(self, 'resume', None)
+        if resume:
+            resume.mark('submitting')
+        try:
+            result = await self._submit(videos, cover_url)
+        except ResponseCodeException:
+            # Parsed nonzero platform response: rejected, not an unknown POST.
+            if resume:
+                resume.mark('complete')
+            raise
 
         self.dispatch(VideoUploaderEvents.COMPLETED.value, result)
         return result
@@ -1157,7 +1166,14 @@ class VideoUploader(AsyncEvent):
         Returns:
             str: 分 P 文件 ID，用于 submit 时的 $.videos[n].filename 字段使用。
         """
-        preupload = await self._preupload(page)
+        resume = getattr(self, 'resume', None)
+        if resume and resume.phase == 'complete':
+            return resume.data['result']
+        preupload = resume.session if resume else None
+        if preupload is None:
+            preupload = await self._preupload(page)
+            if resume:
+                resume.set_session(preupload)
         self.dispatch(
             VideoUploaderEvents.PRE_PAGE.value,
             {"page": page, "endpoint": preupload.get("endpoint")},
@@ -1175,7 +1191,13 @@ class VideoUploader(AsyncEvent):
         # 缓存 upload_id，这玩意只能从上传的分块预检结果获得
         upload_id = preupload["upload_id"]
         for offset in chunk_offset_list:
-            chunks_pending.append((offset, chunk_number))
+            if resume and chunk_number in resume.confirmed:
+                self.dispatch(VideoUploaderEvents.AFTER_CHUNK.value, {
+                    'page': page, 'offset': offset, 'chunk_number': chunk_number,
+                    'total_chunk_count': total_chunk_count,
+                })
+            else:
+                chunks_pending.append((offset, chunk_number))
             chunk_number += 1
 
         try:
@@ -1186,17 +1208,18 @@ class VideoUploader(AsyncEvent):
         while chunks_pending:
             tasks = []
 
+            async def upload_confirmed(offset, number):
+                result = await self._upload_chunk(page, offset, number, total_chunk_count, preupload)
+                if resume:
+                    # No await between read/update/atomic replace: serialized on this loop.
+                    resume.confirm(number)
+                return result
+
             while len(tasks) < threads and chunks_pending:
                 offset, chunk_number = chunks_pending.pop(0)
                 tasks.append(
                     create_task(
-                        self._upload_chunk(
-                            page,
-                            offset,
-                            chunk_number,
-                            total_chunk_count,
-                            preupload,
-                        )
+                        upload_confirmed(offset, chunk_number)
                     )
                 )
 
@@ -1209,7 +1232,11 @@ class VideoUploader(AsyncEvent):
                 await asyncio.gather(*tasks, return_exceptions=True)
                 raise
 
+        if resume:
+            resume.mark('merging')
         data = await self._complete_page(page, total_chunk_count, preupload, upload_id)
+        if resume:
+            resume.complete(data)
 
         self.dispatch(VideoUploaderEvents.AFTER_PAGE.value, {"page": page})
 
@@ -1289,14 +1316,18 @@ class VideoUploader(AsyncEvent):
             "page": page,
         }
 
-        max_attempts = 6
-        deadline = time.monotonic() + 900.0
+        # A finite per-part outage budget, not an arbitrary attempt count.
+        # With bounded concurrency this also bounds a no-progress batch.
+        started = time.monotonic()
+        deadline = started + 3600.0
+        attempt = 0
 
-        for attempt in range(1, max_attempts + 1):
+        while True:
+            attempt += 1
             attempt_data = {
                 **chunk_event_callback_data,
                 "attempt": attempt,
-                "max_attempts": max_attempts,
+                "max_attempts": '3600s预算',
             }
             self.dispatch(VideoUploaderEvents.PRE_CHUNK.value, attempt_data)
 
@@ -1333,10 +1364,10 @@ class VideoUploader(AsyncEvent):
             except Exception as err:
                 from modules.upload_errors import retryable_chunk_error, curl_error_code
                 retryable = retryable_chunk_error(err, status_code)
-                retrying = retryable and attempt < max_attempts
-                ceiling = min(5 * 2 ** (attempt - 1), 60)
+                retrying = retryable
+                ceiling = min(5 * 2 ** min(attempt - 1, 4), 60)
                 retry_delay = random.uniform(ceiling / 2, ceiling) if retrying else 0
-                reason = 'retry' if retrying else ('attempts_exhausted' if retryable else 'permanent')
+                reason = 'retry' if retrying else 'permanent'
                 # Retry-After belongs only to this PUT response, not the global client.
                 if retrying:
                     from email.utils import parsedate_to_datetime
@@ -1352,7 +1383,7 @@ class VideoUploader(AsyncEvent):
                     retrying = False
                     reason = 'deadline_exhausted'
                 info = (f'HTTP={status_code} curl={curl_error_code(err)} '
-                        f'{type(err).__name__} reason={reason} remaining={remaining:.1f}s')
+                        f'{type(err).__name__} reason={reason} elapsed={time.monotonic()-started:.1f}s remaining={remaining:.1f}s')
                 failure_data = {
                     **attempt_data,
                     "info": info,

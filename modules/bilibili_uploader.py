@@ -27,6 +27,7 @@ from .bilibili_auth import (
     validate_credential_remote,
 )
 from .utils import get_app_subdir
+from .upos_resume import UploadCheckpoint
 
 BILIBILI_TITLE_LIMIT = 80
 BILIBILI_DESCRIPTION_LIMIT = 2000
@@ -50,6 +51,25 @@ BILIBILI_SUBMIT_API_BADGES = {
 def bilibili_submit_api_badge(value: Optional[str]) -> str:
     """返回投稿接口徽标文案；未登记的取值返回空字符串（模板据此不渲染徽标）。"""
     return BILIBILI_SUBMIT_API_BADGES.get(str(value or "").strip().lower(), "")
+
+
+async def _run_resumable_upload(uploader, root, account, cancel_event=None):
+    with UploadCheckpoint(root, uploader.pages[0].path, account) as checkpoint:
+        if checkpoint.phase == 'submitted':
+            return checkpoint.data['submitted_result']
+        uploader.resume = checkpoint
+        if cancel_event is not None:
+            cancel_event._upos_recovery_active = True
+        try:
+            result = await _start_cancellable_upload(uploader, cancel_event)
+        finally:
+            if cancel_event is not None:
+                cancel_event._upos_recovery_active = False
+        if isinstance(result, dict) and (result.get('bvid') or result.get('aid') or
+                isinstance(result.get('data'), dict) and (result['data'].get('bvid') or result['data'].get('aid'))):
+            checkpoint.data['submitted_result'] = result
+            checkpoint.mark('submitted')
+        return result
 
 
 async def _start_cancellable_upload(uploader, cancel_event=None):
@@ -553,15 +573,18 @@ class BilibiliUploader:
 
             _emit_progress("0.0%")
             self.log("开始上传到bilibili")
+            import hashlib
+            account = hashlib.sha256(str(credential.get_cookies().get('DedeUserID', '')).encode()).hexdigest()
+            resume_root = os.path.join(get_app_subdir('db'), '.upos-resume')
             try:
-                result = asyncio.run(_start_cancellable_upload(uploader, cancel_event))
+                result = asyncio.run(_run_resumable_upload(uploader, resume_root, account, cancel_event))
             except RuntimeError as exc:
                 if 'asyncio.run() cannot be called from a running event loop' not in str(exc):
                     raise
                 # Only event-loop setup failures are safe to rerun, not upload failures.
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    result = pool.submit(asyncio.run, _start_cancellable_upload(uploader, cancel_event)).result()
+                    result = pool.submit(asyncio.run, _run_resumable_upload(uploader, resume_root, account, cancel_event)).result()
 
             _emit_progress("100.0%")
             self.log(f"bilibili上传完成: {result}")

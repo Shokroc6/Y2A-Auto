@@ -210,7 +210,7 @@ class ChunkRetryClassifierTests(unittest.TestCase):
                     asyncio.run(uploader._upload_chunk(VideoUploaderPage(path, 't'), 0, 0, 1, preupload))
         self.assertEqual(client.request.await_count, 1)
         self.assertEqual([f['retrying'] for f in failures], [False])
-        self.assertEqual({f['max_attempts'] for f in failures}, {6})
+        self.assertEqual({f['max_attempts'] for f in failures}, {'3600s预算'})
         self.assertEqual(failures[0]['reason'], 'permanent')
 
 

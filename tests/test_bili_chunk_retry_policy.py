@@ -53,9 +53,9 @@ class RetryTests(unittest.TestCase):
             with self.subTest(failure=type(failure).__name__):
                 r,c,t,u=self.run_case([failure,200]);self.assertIsInstance(r,Exception);self.assertEqual(len(c.calls),1)
     def test_budget_covers_requests_and_waits(self):
-        r,c,t,u=self.run_case([TimeoutError()]*10,cost=150)
-        self.assertIsInstance(r,Exception);self.assertLessEqual(t.now,900)
-        self.assertLess(c.calls[-1]['timeout'],160)
+        r,c,t,u=self.run_case([TimeoutError()]*40,cost=150)
+        self.assertIsInstance(r,Exception);self.assertLessEqual(t.now,3600)
+        self.assertLessEqual(c.calls[-1]['timeout'],160)
         self.assertEqual(u.events[-1][1]['reason'],'deadline_exhausted')
     def test_retry_after_not_early(self):
         for header in ['120','Fri, 01 Jan 2100 00:00:00 GMT']:
@@ -95,7 +95,7 @@ class RetryTests(unittest.TestCase):
         for code in [400,401,403,404,405,409,412,413,501,505]:
             r,c,t,u=self.run_case([code,200]);self.assertEqual(len(c.calls),1)
     def test_exhaustion_and_retry_after_values(self):
-        r,c,t,u=self.run_case([503]*8);self.assertEqual(len(c.calls),6);self.assertEqual(u.events[-1][1]['reason'],'attempts_exhausted')
+        r,c,t,u=self.run_case([503]*8+[200]);self.assertEqual(len(c.calls),9);self.assertIsInstance(r,dict)
         for value in ['0','bad','-10','Sun, 06 Nov 1994 08:49:37 GMT','999999999999999999999999999999999999999999']:
             r,c,t,u=self.run_case([(503,{'Retry-After':value}),200])
             self.assertEqual(len(c.calls),1 if value.startswith('999') else 2)
@@ -178,6 +178,10 @@ class RetryTests(unittest.TestCase):
             node=next(n for n in source.body if isinstance(n,ast.FunctionDef) and n.name==name)
             exec(compile(ast.Module(body=[node],type_ignores=[]),'<reaper-AST>','exec'),env)
         flag=env['get_task_cancel_event']('fixture')
+        flag._upos_recovery_active = True
+        self.assertEqual(env['reset_stuck_tasks'](skip_active=True,cancel_active=True),0)
+        self.assertFalse(flag.is_set())
+        flag._upos_recovery_active = False
         self.assertEqual(env['reset_stuck_tasks'](skip_active=True,cancel_active=True),0)
         self.assertTrue(flag.is_set())
     def test_success_stops_immediately(self):

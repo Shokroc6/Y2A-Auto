@@ -77,8 +77,11 @@ class ChunkPutTimeoutTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _run_chunk(self, client, offset=0, number=0):
+        from test_bili_chunk_retry_policy import Clock
+        clock=Clock()
         with patch("modules.bili_sdk.video_uploader.get_client", return_value=client), \
-             patch("modules.bili_sdk.video_uploader.asyncio.sleep", new=AsyncMock()):
+             patch("modules.bili_sdk.video_uploader.asyncio.sleep", new=clock.sleep), \
+             patch("modules.bili_sdk.video_uploader.time.monotonic",clock.monotonic):
             return asyncio.run(self.uploader._upload_chunk(
                 self.page, offset, number, 2, dict(self.preupload)))
 
@@ -96,8 +99,8 @@ class ChunkPutTimeoutTests(unittest.TestCase):
         client = Mock(request=AsyncMock(side_effect=TimeoutError("t")))
         with self.assertRaises(TimeoutError):
             self._run_chunk(client)
-        self.assertEqual(client.request.await_count, 6)
-        self.assertEqual({c.kwargs["timeout"] for c in client.request.await_args_list}, {160.0})
+        self.assertGreater(client.request.await_count, 6)
+        self.assertLessEqual(max(c.kwargs["timeout"] for c in client.request.await_args_list),160.0)
 
     def test_complete_page_keeps_global_timeout(self):
         client = Mock(request=AsyncMock(return_value=_Resp(payload={"OK": 1, "key": "/v.mp4"})))

@@ -2411,7 +2411,9 @@ def reset_stuck_tasks(skip_active=False, cancel_active=False):
                 updated_at = task[2]
 
                 if skip_active and _is_task_active(task_id):
-                    if cancel_active:
+                    # UPOS PUT has its own finite recovery deadline. A stale DB
+                    # timestamp is not evidence that this active transfer hung.
+                    if cancel_active and not getattr(get_task_cancel_event(task_id), '_upos_recovery_active', False):
                         request_task_cancel(task_id)
                     logger.warning(
                         f"任务 {task_id[:8]}... 仍处于活动线程中，已跳过自动重置"

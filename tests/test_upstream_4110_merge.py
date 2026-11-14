@@ -34,7 +34,7 @@ class MergeUploadErrorTests(unittest.TestCase):
             for name, kwargs in {
                 'setup_task_logger': {'return_value': logger},
                 'configure_bilibili_runtime': {},
-                'load_credential_from_file': {'return_value': object()},
+                'load_credential_from_file': {'return_value': Mock(get_cookies=lambda: {'DedeUserID':'fixture-account'})},
                 'validate_credential_remote': {'return_value': (True, 'ok')},
                 'ensure_credential_buvid': {'return_value': False},
                 'video_uploader.VideoMeta': {'return_value': Mock()},

@@ -164,7 +164,7 @@ class UploadLineLogTests(unittest.TestCase):
                     f.write(b"t")
             with patch("modules.bilibili_uploader.setup_task_logger", return_value=logger), \
                  patch("modules.bilibili_uploader.configure_bilibili_runtime"), \
-                 patch("modules.bilibili_uploader.load_credential_from_file", return_value=object()), \
+                 patch("modules.bilibili_uploader.load_credential_from_file", return_value=Mock(get_cookies=lambda: {'DedeUserID':'fixture-account'})), \
                  patch("modules.bilibili_uploader.validate_credential_remote", return_value=(True, "ok")), \
                  patch("modules.bilibili_uploader.ensure_credential_buvid", return_value=False), \
                  patch("modules.bilibili_uploader.video_uploader.VideoMeta", return_value=object()), \

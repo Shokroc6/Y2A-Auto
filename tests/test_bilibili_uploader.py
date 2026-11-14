@@ -59,13 +59,16 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
         self.assertNotIn('PRIVATE', str(failures))
 
     def test_timeouts_have_bounded_extra_attempts(self):
+        from test_bili_chunk_retry_policy import Clock
+        clock = Clock()
         client = Mock()
         client.request = AsyncMock(side_effect=TimeoutError('secret request'))
-        with patch('modules.bili_sdk.video_uploader.get_client', return_value=client), patch('modules.bili_sdk.video_uploader.asyncio.sleep', new=AsyncMock()) as sleep:
+        with patch('modules.bili_sdk.video_uploader.get_client', return_value=client), patch('modules.bili_sdk.video_uploader.asyncio.sleep', new=clock.sleep), patch('modules.bili_sdk.video_uploader.time.monotonic', clock.monotonic):
             with self.assertRaises(TimeoutError):
                 asyncio.run(self.uploader._upload_chunk(self.page, 0, 0, 1, dict(self.preupload)))
-        self.assertEqual(client.request.await_count, 6)
-        self.assertEqual([call.args[0] for call in sleep.call_args_list], [5, 10, 20, 40, 60])
+        self.assertGreater(client.request.await_count, 6)
+        self.assertEqual(clock.sleeps[:5], [5, 10, 20, 40, 60])
+        self.assertLessEqual(clock.now,3600)
 
     def test_chunk_retries_transient_failures_then_succeeds(self):
         client = Mock()
@@ -104,7 +107,9 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
         self.assertEqual(len(successes), 1)
         self.assertEqual(sleep_mock.await_count, 2)
 
-    def test_chunk_stops_after_six_transient_failures(self):
+    def test_chunk_stops_at_finite_outage_budget(self):
+        from test_bili_chunk_retry_policy import Clock
+        clock = Clock()
         client = Mock()
         client.request = AsyncMock(return_value=_FakeResponse(503))
         failures = []
@@ -115,8 +120,8 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
         with patch(
             "modules.bili_sdk.video_uploader.get_client", return_value=client
         ), patch(
-            "modules.bili_sdk.video_uploader.asyncio.sleep", new=AsyncMock()
-        ):
+            "modules.bili_sdk.video_uploader.asyncio.sleep", new=clock.sleep
+        ), patch('modules.bili_sdk.video_uploader.time.monotonic', clock.monotonic):
             with self.assertRaises(NetworkException):
                 asyncio.run(
                     self.uploader._upload_chunk(
@@ -124,10 +129,10 @@ class BilibiliSdkChunkRetryTests(unittest.TestCase):
                     )
                 )
 
-        self.assertEqual(client.request.await_count, 6)
-        self.assertEqual(len(failures), 6)
+        self.assertGreater(client.request.await_count, 6)
+        self.assertEqual(len(failures), client.request.await_count)
         self.assertFalse(failures[-1]["retrying"])
-        self.assertEqual(failures[-1]["attempt"], 6)
+        self.assertEqual(failures[-1]["reason"], 'deadline_exhausted')
         self.assertEqual(failures[-1]["status_code"], 503)
 
     def test_chunk_does_not_retry_client_error(self):
@@ -273,7 +278,7 @@ class BilibiliProgressTests(unittest.TestCase):
                 "modules.bilibili_uploader.configure_bilibili_runtime"
             ), patch(
                 "modules.bilibili_uploader.load_credential_from_file",
-                return_value=object(),
+                return_value=Mock(get_cookies=lambda: {'DedeUserID':'fixture-account'}),
             ), patch(
                 "modules.bilibili_uploader.validate_credential_remote",
                 return_value=(True, "ok"),
