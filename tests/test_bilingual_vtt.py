@@ -93,9 +93,10 @@ class BilingualVttTests(unittest.TestCase):
         import html
         import re
         source = Path('/home/ubuntu/arclight/y2a-migration-audit/real-subtitles-XN3xNJvWXsc/XN3xNJvWXsc.en.vtt')
-        if not source.is_file():
-            self.skipTest('Optional external 114-cue sample is not distributed; synthetic regressions always run')
-        original = source.read_bytes()
+        try:
+            original = source.read_bytes()
+        except (FileNotFoundError, PermissionError):
+            self.skipTest('Optional external 114-cue sample is unavailable; synthetic regressions always run')
         # Independent raw payload/timestamp oracle, not the production reader.
         raw = re.findall(r'(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})\n(.*?)(?=\n\n|\Z)', original.decode(), re.S)
         self.assertEqual(len(raw), 114)
