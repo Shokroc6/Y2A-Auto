@@ -3,6 +3,9 @@
 {% block title %}Y2A-Auto - 编辑任务{% endblock %}
 
 {% block content %}
+{% if task.subtitle_warning_message == 'no_source_subtitle' %}
+<div class="alert alert-warning" role="status"><strong>无字幕</strong>：无可用字幕，已跳过字幕处理</div>
+{% endif %}
 <div class="edit-task-container" data-upload-target="{{ upload_target|default('acfun') }}">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2>编辑任务</h2>

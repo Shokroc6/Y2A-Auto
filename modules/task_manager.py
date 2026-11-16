@@ -1216,7 +1216,8 @@ def recover_interrupted_tasks_to_pending():
                        subtitle_qc_checked_at = NULL,
                        subtitle_quality_state = NULL,
                        asr_warning_message = NULL,
-                       subtitle_warning_message = NULL
+                       subtitle_warning_message = CASE WHEN subtitle_warning_message = 'no_source_subtitle'
+                           THEN subtitle_warning_message ELSE NULL END
                    WHERE id = ?''',
                 (TASK_STATES['PENDING'], now_str, task_id)
             )
@@ -2208,7 +2209,7 @@ def retry_failed_tasks(config=None):
                 task_id,
                 silent=True,
                 status=TASK_STATES['READY_FOR_UPLOAD'],
-                error_message=None,
+                error_message=(original_error if task.get('error_category') == 'subtitle_translation_failed' else None),
                 upload_progress=None
             )
             _start_background_upload_retry(task_id, config)
@@ -2431,7 +2432,8 @@ def reset_stuck_tasks(skip_active=False, cancel_active=False):
                         subtitle_qc_checked_at = NULL,
                         subtitle_quality_state = NULL,
                         asr_warning_message = NULL,
-                        subtitle_warning_message = NULL
+                        subtitle_warning_message = CASE WHEN subtitle_warning_message = 'no_source_subtitle'
+                           THEN subtitle_warning_message ELSE NULL END
                     WHERE id = ?
                 ''', (TASK_STATES['FAILED'], 
                       f"任务超时重置 (原状态: {old_status})",
@@ -3570,6 +3572,42 @@ class TaskProcessor:
         except Exception as exc:
             task_logger.warning(f'YouTube 自动字幕去滚动跳过: {type(exc).__name__}')
 
+    def _skip_unavailable_source_subtitles(self, task_id, task, task_dir, task_logger):
+        """Only explicit empty track metadata + no subtitle artifacts is normal absence."""
+        if _is_asr_enabled(self.config):
+            return False
+        if task.get('subtitle_path_original') or task.get('subtitle_path_translated'):
+            return False
+        if task.get('subtitle_qc_failed') or task.get('subtitle_quality_state') in ('failed', 'degraded'):
+            return False
+        if task.get('subtitle_warning_message') not in (None, '', 'no_source_subtitle'):
+            return False
+        legacy_missing_error = (
+            task.get('error_category') == 'subtitle_translation_failed'
+            and task.get('error_message') == '字幕翻译未通过验收，已停止自动上传；请检查保留的字幕产物。'
+        )
+        if task.get('error_category') and not legacy_missing_error:
+            return False
+        try:
+            # Include rejected/partial files and failure diagnostics: never hide damage.
+            if any(re.search(r'\.(srt|vtt|ass|ssa|ttml|srv[123])(?:\.|$)', name, re.I)
+                   or name.startswith('translated_') for name in os.listdir(task_dir)):
+                return False
+            metadata_path = task.get('metadata_json_path_local') or os.path.join(task_dir, 'metadata.json')
+            with open(metadata_path, encoding='utf-8') as metadata_file:
+                metadata = json.load(metadata_file)
+            if not all(key in metadata and isinstance(metadata[key], dict) and not metadata[key]
+                       for key in ('subtitles', 'automatic_captions')):
+                return False
+        except (OSError, ValueError, TypeError):
+            return False
+        updates = {'subtitle_warning_message': 'no_source_subtitle'}
+        if legacy_missing_error:
+            updates.update(error_category=None, error_message=None)
+        update_task(task_id, **updates)
+        task_logger.warning('无可用字幕，已跳过字幕处理')
+        return True
+
     def _translate_subtitle(self, task_id, task_logger, embed_in_video_override=None):
         """翻译字幕文件"""
         task = get_task(task_id)
@@ -3790,6 +3828,8 @@ class TaskProcessor:
                         task_logger.warning("语音识别未启用或视频文件缺失，无法生成所需字幕")
                         return not translation_enabled
                 else:
+                    if self._skip_unavailable_source_subtitles(task_id, task, task_dir, task_logger):
+                        return True
                     task_logger.warning("未找到源字幕且未启用语音识别，无法完成字幕翻译")
                     return not translation_enabled
 
@@ -9039,6 +9079,9 @@ class TaskProcessor:
             subtitle_path_original, subtitle_path_translated, subtitle_language = self._resolve_existing_subtitle_assets(
                 task_id, task, task_dir
             )
+            if (not subtitle_path_original and not subtitle_path_translated
+                    and self._skip_unavailable_source_subtitles(task_id, task, task_dir, task_logger)):
+                return get_task(task_id)
             if translation_enabled and (not subtitle_path_original and (
                     subtitle_path_translated or not _is_asr_enabled(self.config))):
                 update_task(task_id, status=TASK_STATES['FAILED'],

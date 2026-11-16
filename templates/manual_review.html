@@ -25,6 +25,9 @@
                         {% endif %}
                         
                         <div class="card-body">
+                            {% if task.subtitle_warning_message == 'no_source_subtitle' %}
+                            <div class="alert alert-warning" role="status"><strong>无字幕</strong>：无可用字幕，已跳过字幕处理</div>
+                            {% endif %}
                             {% if task.error_message %}
                             <div class="alert alert-warning">
                                 <i class="bi bi-exclamation-triangle"></i> {{ task.error_message }}

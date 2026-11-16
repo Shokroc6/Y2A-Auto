@@ -123,7 +123,9 @@
                 {% endif %}
                 {% if task.subtitle_warning_message %}
                     {% set subtitle_w = task.subtitle_warning_message|trim %}
-                    {% if subtitle_w == 'subtitle_embed_failed' %}
+                    {% if subtitle_w == 'no_source_subtitle' %}
+                        {% set subtitle_w_tip = '无可用字幕，已跳过字幕处理' %}
+                    {% elif subtitle_w == 'subtitle_embed_failed' %}
                         {% set subtitle_w_tip = '字幕烧录失败，已保留字幕文件并继续上传原视频' %}
                     {% elif subtitle_w == 'asr_failed_block_embed' %}
                         {% set subtitle_w_tip = 'ASR/VAD 质量结局为 failed（来源不可信），已拒绝烧录字幕并继续上传原视频' %}
@@ -137,7 +139,7 @@
                         {% set subtitle_w_tip = '字幕处理警告: ' ~ subtitle_w %}
                     {% endif %}
                     <div class="mt-1">
-                        <span class="badge bg-warning text-dark" title="{{ subtitle_w_tip }}" data-bs-toggle="tooltip" data-bs-placement="top">字幕烧录异常</span>
+                        <span class="badge bg-warning text-dark" title="{{ subtitle_w_tip }}" data-bs-toggle="tooltip" data-bs-placement="top">{{ '无字幕' if subtitle_w == 'no_source_subtitle' else '字幕烧录异常' }}</span>
                     </div>
                 {% endif %}
             </div>
