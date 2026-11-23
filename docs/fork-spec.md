@@ -18,8 +18,8 @@
 
 - 上传准备和重试复用仍有效的烧录成品，不把已烧录成品作为再烧录的输入；确需重烧时使用原视频。
 - 新配置及空白字体设置默认使用随仓库分发的 Noto Sans CJK SC Regular（`NotoSansCJKsc-Regular.otf`），西文与中文用同一字体。已有字体选择不自动迁移；显式选择 Roboto Medium 时保留原有中文回退。不改变字幕样式参数、时间或现有烧录成品。
-- 4K60 CPU 烧录获得适合该负载的有限超时预算；不为延长预算而降低分辨率、帧率或画质，不改变其他编码类别原有预算。
-- **验收**：重复上传准备不重复转码；FFmpeg/libass 对西文和中文均选中默认 Noto，显式选择 Roboto 时仍按旧方式渲染；4K60 样本能在放宽后的有限预算内完成，输出分辨率、帧率与源一致。[烧录复用](../tests/test_subtitle_burn_idempotency.py) · [字体](../tests/test_bundled_subtitle_fonts.py) · [4K60](../tests/test_embed_4k60_timeout.py)
+- CPU 烧录按片长、每帧像素数和每秒像素量连续估算有限的超时预算，不对单个分辨率或帧率设特例。缺失或非法的分辨率、帧率沿用旧预算；低负载预算不缩短，保留已验证的 4K60 预算及 x265 的额外预算。硬编阶段的预算不变；回退到 CPU 时，外层总截止时间与各阶段使用同一预算规则。不更改分辨率、帧率、画质或编码预设。
+- **验收**：重复上传准备不重复转码；FFmpeg/libass 对西文和中文均选中默认 Noto，显式选择 Roboto 时仍按旧方式渲染；验证 4K15、4K29.97、4K59.94、1440p30/60 和常见 1080p 规格，检查预算随负载变化、有限上限、缺失/非法元数据及软硬编回退；用已知的真实烧录数据校验预算余量。[烧录复用](../tests/test_subtitle_burn_idempotency.py) · [字体](../tests/test_bundled_subtitle_fonts.py) · [烧录超时](../tests/test_embed_4k60_timeout.py)
 
 ## DIST-1 构建与发布
 

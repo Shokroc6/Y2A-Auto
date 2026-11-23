@@ -4954,23 +4954,10 @@ class TaskProcessor:
     @staticmethod
     def _estimate_embed_timeout(video_duration, cpu_codec=None,
                                 video_width=None, video_height=None, video_fps=None):
-        """根据视频时长估算 FFmpeg 超时时间（秒）。
+        """按片长估算 FFmpeg 超时；仅已识别的 CPU 阶段按画面负载加预算。
 
-        x264 非 4K60 路径与历史完全一致（时长 * 3，超过 30 分钟则 * 2，下限 1800，
-        上限 10800）。明确识别的 CPU 4K60（含 59.94fps）至少按片长 * 12，
-        x264 上限 43200 秒；x265 保留现有 5 倍放大。缺失元数据不扩大预算。
-        x265 路径按 EMBED_TIMEOUT_X265_FACTOR 放大估算与上限：
-        libx265 实测比同 preset 的 libx264 慢约 5 倍，沿用 x264 的预算会让长视频
-        在编码中途被强杀；而且首轮就把 overall_deadline 用完时，后续降级阶段会被
-        「预算已耗尽」直接跳过 —— 连 x265 -> x264 那一级都轮不到。
-
-        **下限同为 5 倍**（这是有意为之）：10 分钟素材的 x265 预算是 9000s 而不是
-        1800s。取向保守 —— 宁可让卡住的 ffmpeg 多等，也不要在编码中途杀掉一个本来
-        能跑完的任务。
-
-        ``cpu_codec`` 只描述**这个阶段实际使用的**软编码器：硬编回退到 CPU 时，
-        调用点必须先按 CPU 阶段的编码器再算一次（见 _embed_subtitle_in_video 的
-        _stage_budget），否则 x265 阶段会拿到 x264 的预算。
+        缺少有效宽高/帧率时沿用历史时长估算。硬件阶段传入 None，回退到 CPU
+        时由 _embed_stage_budget 传入该阶段的软编码器。x265 保留原估算倍数。
         """
         if video_duration:
             rate = 3 if video_duration < 1800 else 2
@@ -4978,30 +4965,37 @@ class TaskProcessor:
         else:
             estimated_time = 3600
 
-        # Only an explicitly identified CPU 4K60 stage gets the larger budget.
-        # Missing/invalid probe metadata keeps the historical policy. 59.94 counts
-        # as 60fps; 4K30 and 1080p60 do not. Keep a finite 12-hour x264 cap.
-        try:
+        load = 0.0
+        if cpu_codec in ('x264', 'x265'):
             from fractions import Fraction
-            is_cpu_4k60 = (
-                cpu_codec in ('x264', 'x265')
-                and float(video_width) * float(video_height) >= 3840 * 2160
-                and min(float(video_width), float(video_height)) >= 2160
-                and 59 <= float(Fraction(str(video_fps))) <= 61
-            )
-        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
-            is_cpu_4k60 = False
-        if is_cpu_4k60:
-            estimated_time = max(estimated_time, (video_duration or 3600) * 12)
+            from math import isfinite
 
+            try:
+                width, height = float(video_width), float(video_height)
+                fps = float(Fraction(str(video_fps)))
+                if all(isfinite(value) and value > 0 for value in (width, height, fps)):
+                    pixels = width * height
+                    hd_pixels, uhd_pixels = 1920 * 1080, 3840 * 2160
+                    # Keep a per-frame term even at low FPS. The throughput
+                    # anchor retains the old 12x budget starting at UHD 59 FPS.
+                    frame_load = max(0.0, (pixels - hd_pixels) / (uhd_pixels - hd_pixels))
+                    hd_rate = hd_pixels * 60
+                    rate_load = max(0.0, (pixels * fps - hd_rate) / (uhd_pixels * 59 - hd_rate))
+                    load = min(10.0, 4 * frame_load + 6 * rate_load)
+            except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+                pass
+
+        if load:
+            # Keep the legacy estimate as a floor; increase the cap gradually.
+            estimated_time = (max(estimated_time, video_duration * (2 + load))
+                              if video_duration else 3600 * (1 + 11 * load / 10))
+        ceiling = EMBED_TIMEOUT_MAX_SECONDS
+        high_ceiling = 43200
         if normalize_cpu_codec(cpu_codec) == 'x265':
             estimated_time *= EMBED_TIMEOUT_X265_FACTOR
             ceiling = EMBED_TIMEOUT_MAX_SECONDS_X265
-        else:
-            ceiling = EMBED_TIMEOUT_MAX_SECONDS
-        if is_cpu_4k60:
-            ceiling = max(ceiling, 43200 * (
-                EMBED_TIMEOUT_X265_FACTOR if cpu_codec == 'x265' else 1))
+            high_ceiling *= EMBED_TIMEOUT_X265_FACTOR
+        ceiling += (high_ceiling - ceiling) * (load / 10)
 
         return int(max(EMBED_TIMEOUT_MIN_SECONDS, min(estimated_time, ceiling)))
 
