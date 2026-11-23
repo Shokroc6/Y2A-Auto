@@ -17,9 +17,14 @@
 ## SUB-3 烧录与字体
 
 - 上传准备和重试复用仍有效的烧录成品，不把已烧录成品作为再烧录的输入；确需重烧时使用原视频。
-- 默认西文用 Roboto Medium，中文用 Noto 回退；自选字体不被默认规则覆盖。Windows 便携包须能找到随包字体。
+- 新配置及空白字体设置默认使用随仓库分发的 Noto Sans CJK SC Regular（`NotoSansCJKsc-Regular.otf`），西文与中文用同一字体。已有字体选择不自动迁移；显式选择 Roboto Medium 时保留原有中文回退。不改变字幕样式参数、时间或现有烧录成品。
 - 4K60 CPU 烧录获得适合该负载的有限超时预算；不为延长预算而降低分辨率、帧率或画质，不改变其他编码类别原有预算。
-- **验收**：重复上传准备不重复转码；实际渲染使用预期字体；4K60 样本能在放宽后的有限预算内完成，输出分辨率、帧率与源一致。[烧录复用](../tests/test_subtitle_burn_idempotency.py) · [字体](../tests/test_bundled_subtitle_fonts.py) · [4K60](../tests/test_embed_4k60_timeout.py)
+- **验收**：重复上传准备不重复转码；FFmpeg/libass 对西文和中文均选中默认 Noto，显式选择 Roboto 时仍按旧方式渲染；4K60 样本能在放宽后的有限预算内完成，输出分辨率、帧率与源一致。[烧录复用](../tests/test_subtitle_burn_idempotency.py) · [字体](../tests/test_bundled_subtitle_fonts.py) · [4K60](../tests/test_embed_4k60_timeout.py)
+
+## DIST-1 构建与发布
+
+- 本 fork 不再构建或发布 Windows 便携包，包括 Actions 预览产物与 Release 附件；不修改既有发布及附件。Linux CI 全量测试与 Docker 工作流保持独立。
+- **验收**：工作流中没有 Windows 预览或发布构建，同时 Linux CI 仍运行全量测试。[工作流](../tests/test_workflows.py)
 
 ## META-1 标题、简介与投稿类型
 

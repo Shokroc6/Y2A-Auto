@@ -30,6 +30,7 @@ _VIDEO_CPU_PRESET_HD_DEFAULT = 'veryfast'
 # modules/video_encoder_params.py 中 _VALID_CPU_CODECS 的说明。
 _VIDEO_CPU_CODECS = ('x264', 'x265')
 _VIDEO_CPU_CODEC_DEFAULT = 'x264'
+DEFAULT_SUBTITLE_FONT = 'NotoSansCJKsc-Regular.otf'
 
 
 def _normalize_submit_api_value(value) -> str:
@@ -169,7 +170,7 @@ DEFAULT_CONFIG = {
     "YOUTUBE_AUTO_GENERATED_SUBTITLES_ENABLED": False,  # 下载 YouTube 自动生成字幕（可选）
     "SUBTITLE_SOURCE_LANGUAGE": "auto",  # 源语言 (auto, en, ja, ko等)
     "SUBTITLE_TARGET_LANGUAGE": "zh",  # 目标语言 (zh, en, ja, ko等)
-    "SUBTITLE_FONT_NAME": "Roboto-Medium.ttf",  # 烧录字幕使用的内置字体文件名
+    "SUBTITLE_FONT_NAME": DEFAULT_SUBTITLE_FONT,  # 烧录字幕使用的内置字体文件名
     "SUBTITLE_API_PROVIDER": "openai",  # API提供商 (仅支持openai)
     "SUBTITLE_BATCH_SIZE": 3,  # 批次大小
     "SUBTITLE_MAX_RETRIES": 3,  # 最大重试次数

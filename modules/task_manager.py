@@ -22,6 +22,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor as APSchedulerThreadPo
 from apscheduler.schedulers.base import SchedulerNotRunningError
 import queue
 from .utils import get_app_root_dir, get_app_subdir
+from .config_manager import DEFAULT_SUBTITLE_FONT
 from .ffmpeg_manager import get_ffmpeg_path, get_ffprobe_path
 from .subtitle_style import (
     apply_style_overrides,
@@ -6903,16 +6904,10 @@ class TaskProcessor:
     def _normalize_font_filename(font_name):
         return os.path.basename(str(font_name or '').strip()).casefold()
 
-    @classmethod
-    def _bundled_fonts_dir(cls):
-        # Read-only fonts only: writable config/db/log roots stay beside the EXE.
-        if getattr(sys, 'frozen', False):
-            roots = [getattr(sys, '_MEIPASS', None),
-                     os.path.join(os.path.dirname(sys.executable), '_internal')]
-            for root in roots:
-                if root and os.path.isdir(os.path.join(root, 'fonts')):
-                    return os.path.join(root, 'fonts')
-        return get_app_subdir('fonts')
+    @staticmethod
+    def _bundled_fonts_dir():
+        # Read-only resources follow the code, not the writable runtime root.
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'fonts')
 
     @classmethod
     def _iter_bundled_font_paths(cls):
@@ -6985,11 +6980,7 @@ class TaskProcessor:
 
     def _resolve_subtitle_font(self, task_logger, temp_fonts_dir):
         config = getattr(self, 'config', {}) or {}
-        configured_font_name = str(
-            config.get('SUBTITLE_FONT_NAME') or 'Roboto-Medium.ttf'
-        ).strip()
-        if not configured_font_name:
-            configured_font_name = 'Roboto-Medium.ttf'
+        configured_font_name = str(config.get('SUBTITLE_FONT_NAME') or '').strip() or DEFAULT_SUBTITLE_FONT
 
         resolved_font = {
             'configured_font_name': configured_font_name,

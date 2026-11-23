@@ -47,7 +47,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      - name: Install FFmpeg (same build family as Windows)
+      - name: Install FFmpeg (BtbN GPL build)
         run: |
           archive="$RUNNER_TEMP/ffmpeg-linux64-gpl.tar.xz"
           extract_dir="$RUNNER_TEMP/ffmpeg-linux64-gpl"

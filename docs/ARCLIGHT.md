@@ -29,8 +29,6 @@ AI 服务地址须填写 **Windows 能访问的 CPA OpenAI 兼容 API 地址**�
 - 定向离线回归覆盖字幕源选择、双语开关、VTT 字面内容/数字/多行/时间与静音间隔、严格翻译配对、真实 FFmpeg 烧录、标题简介组合、临时运行目录清理，以及两个平台的投稿类型字段和设置保存。
 - 离线 AI/上传边界使用模拟；外部真实字幕样片只在本地存在时追加验证，未提交或打包。离线测试不等于完整应用、所有上游测试、所有视频或平台政策的全覆盖验收。
 
-## Windows 构建与发布边界
+## 历史 Windows 构建
 
-`main` 与 `restart/bilingual` 推送均运行 **Windows build**，通过定向回归后复用上游打包器生成 Actions artifact，保留 14 天。下载入口：仓库 Actions → 对应提交的 Windows build → Artifacts（`Y2A-Auto-win64-preview-<提交SHA>`）。保留 preview 文件名仅为兼容现有下载习惯。
-
-包检查禁止携带运行配置、cookies、数据库、日志、测试与审计样片。该构建仅生成 artifact，不创建 Release、不推 tag、不发布 Docker；原 Release/tag 发布触发器未改变，`restart/bilingual` 分支保留。
+早期版本曾通过 Actions 提供有限期的 Windows 预览包，并有既有 Windows Release。当前 fork 不再构建或发布 Windows 包；历史发布及附件不作改动。

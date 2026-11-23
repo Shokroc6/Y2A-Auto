@@ -192,11 +192,10 @@ python app.py
 
 访问 `http://127.0.0.1:5000`。
 
-### 方案 C：Windows 便携包
+### 历史 Windows 便携包
 
-- `build-tools/` 提供 Windows 可执行文件构建工具
-- 官方 Windows Release 包通常已内置 FFmpeg / FFprobe
-- 如果手工打包，保持 `ffmpeg/` 目录完整即可
+- 本 fork 不再构建或发布 Windows 便携包，包括 Actions 预览产物。既有 Release 及附件不受影响。
+- `build-tools/` 保留上游手工打包工具；新部署建议使用 Docker 或从源码运行。
 
 ## 配置说明
 
@@ -256,7 +255,7 @@ AI 文本功能同时兼容 OpenAI Chat Completions 与 Responses API。`OPENAI_
 - `YOUTUBE_AUTO_GENERATED_SUBTITLES_ENABLED`：下载 YouTube 自动生成字幕，默认 `false`
 - `SUBTITLE_SOURCE_LANGUAGE`：源语言，默认 `auto`
 - `SUBTITLE_TARGET_LANGUAGE`：目标语言，默认 `zh`
-- `SUBTITLE_FONT_NAME`：烧录字幕字体名，新配置默认 `Roboto-Medium.ttf`（中文使用随包 Noto）；已有字体选择不变，粗体默认仍为 `true`。字体许可与来源位于 `fonts/`。
+- `SUBTITLE_FONT_NAME`：烧录字幕字体名，新配置及空白设置默认 `NotoSansCJKsc-Regular.otf`，中英文使用同一字体。已有字体选择不变，粗体默认仍为 `true`。
 - `SUBTITLE_BATCH_SIZE`：翻译批次大小
 - `SUBTITLE_MAX_RETRIES` / `SUBTITLE_RETRY_DELAY`：翻译重试策略
 - `SUBTITLE_EMBED_IN_VIDEO`：是否将字幕嵌入视频
@@ -421,9 +420,9 @@ QC 会先用规则做硬拦截，只有边界样本才会调用 AI 严格复核�
 
 ## 内置字幕字体
 
-- 项目默认内置 `SourceHanSansHWSC-VF.otf`，作为字幕烧录依赖随仓库一起分发
-- 可通过 `SUBTITLE_FONT_NAME` 指定 `fonts/` 目录中的字体文件名；程序会读取该文件的真实字体名供 libass 使用
-- 字体许可证位于 `fonts/LICENSE.txt`
+- 默认使用 `NotoSansCJKsc-Regular.otf`；已有 Roboto Medium 选择仍可用，中文仍由 Noto 回退。
+- 可通过 `SUBTITLE_FONT_NAME` 指定 `fonts/` 目录中的字体文件名；程序会读取该文件的真实字体名供 libass 使用。
+- 字体许可与来源见 [`fonts/`](fonts/)；更改字体不会改写已烧录的视频。
 
 ## 使用指南
 
@@ -547,7 +546,7 @@ ssh -N -L 5000:127.0.0.1:5000 -o ServerAliveInterval=30 user@<服务器公网IP>
   - 也可通过 CookieCloud 自动同步，免去手动导出
 - 找不到 FFmpeg / yt-dlp
   - Docker 环境通常无需处理；本地运行请确保 PATH 正确
-  - 如果使用 Windows Release 包，通常不应出现缺失 FFmpeg；若出现，请确认 `ffmpeg/` 未被安全软件隔离
+  - 如果仍在使用旧版 Windows 便携包，请确认 `ffmpeg/` 未被安全软件隔离
 - 上传 AcFun 失败
   - 更新 `cookies/ac_cookies.json`，或在设置页使用 QR 码重新扫码登录
   - 检查人工审核页元信息是否合规
