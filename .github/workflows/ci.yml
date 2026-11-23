@@ -51,9 +51,11 @@ jobs:
         run: |
           archive="$RUNNER_TEMP/ffmpeg-linux64-gpl.tar.xz"
           extract_dir="$RUNNER_TEMP/ffmpeg-linux64-gpl"
+          # Keep the FFmpeg/libx264 behavior used by the color metadata smoke tests.
           curl --fail --location --retry 3 \
-            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-22-12-36/ffmpeg-N-129219-g359c825152-linux64-gpl.tar.xz \
             --output "$archive"
+          printf '%s  %s\n' 'bcc1539edf917320fd3eb83bd5ab4d0a5ff686980d4717e802e346279beb1f30' "$archive" | sha256sum --check
           mkdir -p "$extract_dir"
           tar -xJf "$archive" -C "$extract_dir" --strip-components=1
           "$extract_dir/bin/ffmpeg" -version
