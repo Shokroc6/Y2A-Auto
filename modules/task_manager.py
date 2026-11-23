@@ -7211,6 +7211,27 @@ class TaskProcessor:
             )
         return ass_header + body
 
+    @staticmethod
+    def _clean_bilingual_render_markup(text):
+        lines = []
+        for line in text.split('\n'):
+            # Strip only literal bold tags and their zero-width padding, not
+            # other angle-bracket text or zero-width word breaks.
+            line = re.sub(r'(?:\u200b[ \t\u200b]*)?</?b>(?:[ \t\u200b]*\u200b)?', '', line, flags=re.I).strip(' \t')
+            # A terminal run is padding unless attached to a path-like token.
+            tail = re.search(r'(?<!\\)(?:\\[hH])+$', line)
+            if tail:
+                prefix = line[:tail.start()]
+                last_word = re.search(r'\S+$', prefix)
+                if not last_word or not re.search(r'[\\/:`]', last_word[0]):
+                    line = prefix.rstrip(' \t')
+            # Only standalone interior runs qualify; do not touch \help, paths,
+            # escaped backslashes or adjacent punctuation in technical text.
+            line = re.sub(r'(?<![^ \t])(?:(?:\\[hH])+[ \t]+)+', '', line)
+            if line:
+                lines.append(line)
+        return '\n'.join(lines)
+
     def _convert_srt_to_ass(
         self,
         subtitle_path,
@@ -7246,6 +7267,7 @@ class TaskProcessor:
                 from .srt_transform_engine import SrtTransformEngine, SrtTransformConfig
                 cues = SrtTransformEngine(SrtTransformConfig()).parse_srt(subtitle_content)
                 for cue in cues:
+                    cue['text'] = self._clean_bilingual_render_markup(cue['text'])
                     cue['preserve_lines'] = True
             else:
                 cues = self._parse_subtitle_text_to_cues(

@@ -22,6 +22,7 @@ from logging.handlers import RotatingFileHandler
 from .utils import get_app_subdir, get_app_root_dir
 from .ffmpeg_manager import get_ffmpeg_path, is_ffmpeg_usable
 from .cookiecloud import try_cookiecloud_youtube_sync
+from .youtube_caption_windows import RECEIPT_PREFIX, RECEIPT_TEMPLATE, permits_direct_lookup, repair_fresh_auto_srt
 from shutil import which as _which
 from urllib.parse import parse_qs, urlparse
 import re
@@ -936,6 +937,13 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
         if progress_callback and not skip_download:
             cmd.extend(['--progress'])
 
+        window_key = None
+        if (config.get('SUBTITLE_BILINGUAL_ENABLED') is True and config.get('SUBTITLE_TRANSLATION_ENABLED') is True
+                and selected_subtitle and selected_subtitle[0] == 'automatic' and '--write-auto-subs' in cmd
+                and re.fullmatch(r'[a-zA-Z0-9-]+', selected_subtitle[1])):
+            window_key = selected_subtitle[1]
+        receipts = []
+
         # 重试机制
         max_retries = 3
         # 预先初始化，避免在异常分支中未绑定导致静态分析报错
@@ -946,6 +954,14 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
 
         for attempt in range(max_retries):
             try:
+                receipts.clear()
+                capture_window = window_key is not None and permits_direct_lookup(cmd, config) and not any(
+                    os.path.lexists(os.path.join(task_dir, name)) for name in (
+                        f'video.{window_key}.srt', f'video.{window_key}.vtt',
+                        f'video.{window_key}.vtt.part', f'translated_{task_id}.srt',
+                    ))
+                attempt_cmd = (cmd + ['--print', RECEIPT_TEMPLATE, '--no-simulate', '--no-quiet', '--newline']
+                               if capture_window else cmd)
                 # 不再回显完整命令：cmd 里的 --proxy 参数携带明文代理凭据，
                 # 回显等同于把代理密码写进日志
                 # （CodeQL py/clear-text-logging-sensitive-data #86）。
@@ -966,7 +982,7 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                     
                     try:
                         process = subprocess.Popen(
-                            cmd,
+                            attempt_cmd,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT,
                             text=True,
@@ -1002,6 +1018,9 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                             except subprocess.TimeoutExpired:
                                 process.kill()
                             raise RuntimeError("任务已取消")
+                        if capture_window and line.startswith(RECEIPT_PREFIX):
+                            receipts.append(line[len(RECEIPT_PREFIX):].strip())
+                            continue  # The in-memory receipt contains a signed subtitle URL.
                         output_lines.append(line)
                         line = line.strip()
                         logger.debug(f"yt-dlp输出: {line}")
@@ -1056,7 +1075,7 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                 else:
                     # 不需要进度回调时使用原来的方式，设置UTF-8编码
                     process = subprocess.run(
-                        cmd, 
+                        attempt_cmd,
                         capture_output=True, 
                         text=True, 
                         check=True, 
@@ -1067,7 +1086,12 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                     if cancel_event is not None and cancel_event.is_set():
                         logger.info("检测到任务取消请求，终止yt-dlp命令执行")
                         raise RuntimeError("任务已取消")
-                    output = process.stdout
+                    output = process.stdout or ''
+                    if capture_window:
+                        receipts.extend(line[len(RECEIPT_PREFIX):] for line in output.split('\n')
+                                        if line.startswith(RECEIPT_PREFIX))
+                        output = '\n'.join(line for line in output.split('\n')
+                                           if not line.startswith(RECEIPT_PREFIX))
                 
                 break  # 成功执行，跳出重试循环
                 
@@ -1084,6 +1108,9 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
                 # 使用已初始化的 output 优先，其次回退到异常对象中的 stdout/stderr
                 error_output = output or getattr(e, 'stdout', "")
                 error_stderr = getattr(e, 'stderr', "") or ""
+                if capture_window:
+                    error_output = '\n'.join(line for line in (error_output or '').split('\n')
+                                             if not line.startswith(RECEIPT_PREFIX))
                 logger.warning(f"标准输出: {error_output}")
                 logger.warning(f"标准错误: {error_stderr}")
                 
@@ -1214,6 +1241,8 @@ def download_video_data(youtube_url, task_id=None, cookies_file_path=None, skip_
         download_success = manual_merge_success or (process is not None and getattr(process, 'returncode', None) == 0)
         if download_success:
             logger.info("下载完成，正在收集文件信息")
+            if window_key is not None and not manual_merge_success and not (cancel_event and cancel_event.is_set()):
+                repair_fresh_auto_srt(task_dir, window_key, receipts, logger)
             
             # 获取下载的文件信息
             video_path = None
