@@ -1412,17 +1412,19 @@ class YouTubeMonitor:
             if not video_ids:
                 return []
             
-            # 获取视频详细信息
+            # videos.list 单次最多接受 50 个 ID；全部批次成功后再返回本频道的结果。
             if self.youtube is None:
                 logger.error(f"频道 {channel_id} YouTube API 对象为 None")
                 return []
-            videos_request = self.youtube.videos().list(
-                part='id,snippet,statistics,contentDetails,liveStreamingDetails',
-                id=','.join(video_ids)
-            )
-            videos_response = self._execute_with_retry(videos_request, f'videos.list (channel {channel_id})')
-            
-            videos = videos_response['items']
+            videos = []
+            batch_size = 50
+            for offset in range(0, len(video_ids), batch_size):
+                videos_request = self.youtube.videos().list(
+                    part='id,snippet,statistics,contentDetails,liveStreamingDetails',
+                    id=','.join(video_ids[offset:offset + batch_size])
+                )
+                videos_response = self._execute_with_retry(videos_request, f'videos.list (channel {channel_id})')
+                videos.extend(videos_response['items'])
             
             # 历史搬运模式需要按时间正序排列（从最老到最新）
             channel_mode = config.get('channel_mode', 'latest')

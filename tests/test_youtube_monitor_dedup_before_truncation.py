@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 import os
 import shutil
 import sys
@@ -138,6 +139,12 @@ class _FakeYouTube:
     def videos(self):
         return _FakeResource('videos.list', self.calls)
 
+    def channels(self):
+        return _FakeResource('channels.list', self.calls)
+
+    def playlistItems(self):
+        return _FakeResource('playlistItems.list', self.calls)
+
 
 class SearchKeywordQueryTests(unittest.TestCase):
     def _new_monitor(self):
@@ -225,6 +232,89 @@ class SearchKeywordQueryTests(unittest.TestCase):
 
         self.assertEqual(videos, [])
         self.assertTrue(monitor._last_fetch_had_errors)
+
+
+class HistoricalPlaylistDetailsTests(unittest.TestCase):
+    def _fetch(self, count, *, missing=(), fail_second_batch=False):
+        monitor = YouTubeMonitor.__new__(YouTubeMonitor)
+        monitor._last_fetch_had_errors = False
+        video_ids = [f'v{i:03d}' for i in range(count)]
+        start = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+        def timestamp(i):
+            return (start + timedelta(minutes=i)).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        # Newest playlist IDs arrive first, so the oldest results are in the last batch.
+        playlist = [
+            {'snippet': {'publishedAt': timestamp(i), 'resourceId': {'videoId': vid}}}
+            for i, vid in reversed(list(enumerate(video_ids)))
+        ]
+        playlist.insert(0, {'snippet': {
+            'publishedAt': timestamp(count), 'resourceId': {'videoId': 'too-new'},
+        }})
+        playlist.append({'snippet': {
+            'publishedAt': timestamp(-1), 'resourceId': {'videoId': 'too-old'},
+        }})
+        details = {vid: _make_raw_video(vid) for vid in video_ids if vid not in missing}
+        for i, vid in enumerate(video_ids):
+            if vid in details:
+                details[vid]['snippet']['publishedAt'] = timestamp(i)
+
+        youtube = _FakeYouTube()
+        monitor.youtube = youtube
+        batches = []
+
+        def execute(request, _operation):
+            params = youtube.calls[-1][1]
+            if request == 'channels.list':
+                return {'items': [{'contentDetails': {'relatedPlaylists': {'uploads': 'UUtest'}}}]}
+            if request == 'playlistItems.list':
+                offset = int(params.get('pageToken', 0))
+                end = offset + params['maxResults']
+                items = playlist[offset:end]
+                if end < len(playlist):
+                    return {'items': items, 'nextPageToken': str(end)}
+                return {'items': items}
+            self.assertEqual(request, 'videos.list')
+            ids = params['id'].split(',')
+            batches.append(ids)
+            if len(ids) > 50:
+                raise RuntimeError('invalidFilters: at most 50 IDs')
+            if fail_second_batch and len(batches) == 2:
+                raise RuntimeError('video details temporarily unavailable')
+            self.assertTrue(set(ids).issubset(video_ids), 'date filtering must precede details lookup')
+            return {'items': [details[vid] for vid in ids if vid in details]}
+
+        with patch.object(monitor, '_execute_with_retry', side_effect=execute):
+            videos = monitor._fetch_channel_videos(
+                {'channel_ids': 'UCtest', 'channel_mode': 'historical', 'max_results': 3},
+                timestamp(0), timestamp(count),
+            )
+        return videos, batches, monitor._last_fetch_had_errors
+
+    def test_large_history_is_fetched_and_sorted_globally(self):
+        for count, expected_sizes in [(51, [50, 1]), (474, [50] * 9 + [24])]:
+            with self.subTest(count=count):
+                expected_ids = [f'v{i:03d}' for i in range(count)]
+                videos, batches, had_error = self._fetch(count)
+                self.assertFalse(had_error)
+                self.assertEqual([len(batch) for batch in batches], expected_sizes)
+                self.assertEqual([vid for batch in batches for vid in batch], expected_ids[::-1])
+                self.assertEqual([video['id'] for video in videos], expected_ids)
+
+    def test_second_batch_error_marks_fetch_incomplete_without_partial_results(self):
+        videos, batches, had_error = self._fetch(51, fail_second_batch=True)
+        self.assertEqual([len(batch) for batch in batches], [50, 1])
+        self.assertTrue(had_error)
+        self.assertEqual(videos, [])
+
+    def test_fifty_ids_use_one_request_and_missing_items_are_not_errors(self):
+        videos, batches, had_error = self._fetch(50, missing={'v007', 'v048'})
+        self.assertEqual([len(batch) for batch in batches], [50])
+        self.assertFalse(had_error)
+        self.assertEqual([video['id'] for video in videos], [
+            f'v{i:03d}' for i in range(50) if i not in {7, 48}
+        ])
 
 
 class DedupBeforeTruncationTests(unittest.TestCase):
