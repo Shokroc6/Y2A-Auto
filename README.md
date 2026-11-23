@@ -18,6 +18,8 @@
 
 </div>
 
+本 fork 的定制行为与验收标准见 [Fork 行为规范](docs/fork-spec.md)。
+
 <p align="center">
   <a href="https://t.me/Y2AAuto_bot" target="_blank">
     <img src="https://img.shields.io/badge/Telegram%20Bot-%40Y2AAuto__bot-2CA5E0?logo=telegram&logoColor=white" alt="Telegram Bot" />
