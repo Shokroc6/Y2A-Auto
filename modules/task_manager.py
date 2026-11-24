@@ -5273,11 +5273,12 @@ class TaskProcessor:
 
     @staticmethod
     def _escape_ass_text(text):
+        # Only the bilingual preserve-lines path uses this. Doubling a slash
+        # does not stop libass from interpreting the last slash in \N/\n/\h.
+        # A word joiner separates literal controls without drawing a glyph.
         normalized = str(text or '').replace('\r\n', '\n').replace('\r', '\n')
-        escaped_lines = []
-        for line in normalized.split('\n'):
-            escaped_lines.append(TaskProcessor._escape_ass_text_line(line))
-        return r'\N'.join(escaped_lines)
+        literal = re.sub(r'\\(?=[Nnh{}])', lambda _: '\\\u2060', normalized)
+        return r'\N'.join(line.replace('{', r'\{').replace('}', r'\}') for line in literal.split('\n'))
 
     @classmethod
     def _compose_ass_dialogue_text(cls, lines, override_font_size=None):
@@ -7213,21 +7214,90 @@ class TaskProcessor:
 
     @staticmethod
     def _clean_bilingual_render_markup(text):
+        # Tokenize whole tags (including quoted attributes) and leave code spans
+        # opaque, so an allowlisted tag inside another tag or code is not removed.
+        tokens = re.compile(r'''`[^`\n]*`|<(?:[^<>"'\n]|"[^"\n]*"|'[^'\n]*')*>''')
+        simple_tag = re.compile(r'</?[biu][ \t]*>', re.I | re.ASCII)
+        font_color = re.compile(r'''<font[ \t]+color[ \t]*=[ \t]*(?:"([#\w]+)"|'([#\w]+)'|([#\w]+))[ \t]*>''', re.I | re.ASCII)
+        colors = {'aqua', 'black', 'blue', 'fuchsia', 'gray', 'green', 'lime', 'maroon',
+                  'navy', 'olive', 'purple', 'red', 'silver', 'teal', 'white', 'yellow'}
+        styles = []
+        fonts = []
+        opened = {}
+        ambiguous = {}
+        for token in tokens.finditer(text):
+            tag = token[0]
+            if tag.startswith('`') or text[token.start() - 1:token.start()] == '\\':
+                continue
+            if simple_tag.fullmatch(tag):
+                name = tag.lstrip('</')[0].lower()
+                if tag.startswith('</'):
+                    if opened.get(name, 0):
+                        opened[name] -= 1
+                        ambiguous.pop(name, None)
+                    else:
+                        opener = ambiguous.pop(name, None)
+                        if opener is not None:
+                            styles.append(opener)
+                    styles.append(token)
+                else:
+                    before = text[token.start() - 1:token.start()]
+                    after = text[token.end():token.end() + 1]
+                    # Bare Vec<i> is ambiguous; a matching closer is evidence
+                    # of a styled span even when its opener abuts a word.
+                    if re.fullmatch(r'[A-Za-z0-9_<]', before) and (not after or not after.isalnum()):
+                        ambiguous[name] = token
+                    else:
+                        ambiguous.pop(name, None)
+                        opened[name] = opened.get(name, 0) + 1
+                        styles.append(token)
+            elif re.match(r'<font(?=[ \t/>])', tag, re.I | re.ASCII):
+                color = font_color.fullmatch(tag)
+                value = next((v.lower() for v in color.groups() if v), '') if color else ''
+                fonts.append(token if value in colors or re.fullmatch(r'#(?:[0-9a-f]{3}|[0-9a-f]{6})', value) else None)
+            elif re.fullmatch(r'</font[ \t]*>', tag, re.I | re.ASCII) and fonts:
+                opener = fonts.pop()
+                if opener is not None:
+                    styles.extend((opener, token))
+
+        parts = []
+        previous = None
+        for token in sorted(styles, key=lambda match: match.start()):
+            gap = text[previous.end() if previous else 0:token.start()]
+            # Inspect only the padding at the edge; keep real word spacing.
+            trimmed = gap.rstrip(' \t\u200b')
+            gap = trimmed + gap[len(trimmed):].replace('\u200b', '')
+            if previous:
+                trimmed = gap.lstrip(' \t\u200b')
+                gap = gap[:len(gap) - len(trimmed)].replace('\u200b', '') + trimmed
+                # A standalone control between styled spans is distinguishable
+                # from the same characters in prose, paths or program strings.
+                control = re.fullmatch(r'[ \t]*\\([Nn])[ \t]*', gap)
+                if control and previous[0].startswith('</') and not token[0].startswith('</'):
+                    gap = '\n' if control[1] == 'N' else ' '
+            parts.append(gap)
+            previous = token
+        tail = text[previous.end():] if previous else text
+        if previous:
+            trimmed = tail.lstrip(' \t\u200b')
+            tail = tail[:len(tail) - len(trimmed)].replace('\u200b', '') + trimmed
+        parts.append(tail)
+
         lines = []
-        for line in text.split('\n'):
-            # Strip only literal bold tags and their zero-width padding, not
-            # other angle-bracket text or zero-width word breaks.
-            line = re.sub(r'(?:\u200b[ \t\u200b]*)?</?b>(?:[ \t\u200b]*\u200b)?', '', line, flags=re.I).strip(' \t')
-            # A terminal run is padding unless attached to a path-like token.
-            tail = re.search(r'(?<!\\)(?:\\[hH])+$', line)
-            if tail:
-                prefix = line[:tail.start()]
-                last_word = re.search(r'\S+$', prefix)
-                if not last_word or not re.search(r'[\\/:`]', last_word[0]):
+        for line in ''.join(parts).split('\n'):
+            line = line.strip(' \t')
+            # Keep the legacy hard-space boundaries; do not rescan long runs.
+            end = len(line)
+            while end >= 2 and line[end - 2:end] in (r'\h', r'\H'):
+                end -= 2
+            if end < len(line) and not (end and line[end - 1] == '\\'):
+                prefix = line[:end]
+                last_word = prefix.split()[-1] if prefix and not prefix[-1].isspace() else ''
+                if not re.search(r'[\\/:`]', last_word):
                     line = prefix.rstrip(' \t')
-            # Only standalone interior runs qualify; do not touch \help, paths,
-            # escaped backslashes or adjacent punctuation in technical text.
-            line = re.sub(r'(?<![^ \t])(?:(?:\\[hH])+[ \t]+)+', '', line)
+            line = re.sub(r'''`[^`]*`|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)|<(?:[^<>"']|"[^"]*"|'[^']*')*>|'''
+                          r'(?P<space>(?<![^ \t])(?:(?:\\[hH])+[ \t]+)+)',
+                          lambda match: '' if match['space'] else match[0], line)
             if line:
                 lines.append(line)
         return '\n'.join(lines)
