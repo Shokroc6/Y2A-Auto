@@ -151,7 +151,8 @@ class RetryRecoveryFixesTests(unittest.TestCase):
                           error_message='缓存译文未通过源文配对/翻译验收，已停止上传；保留原文件，请重新处理字幕。',
                           video_path_local=str(burned), subtitle_path_translated=str(self.cache))
         processor, translator = self._processor(AUTO_MODE_ENABLED=True, SUBTITLE_EMBED_IN_VIDEO=True), self._translator()
-        def burn(_id, video, sub, _lg):
+        def burn(_id, video, sub, _lg, *, bilingual_source_path):
+            self.assertEqual(Path(bilingual_source_path), self.dir / 'video.en.srt')
             out = Path(video).with_name(Path(video).stem + '_with_subtitle.mp4')
             out.write_bytes(b'burned-new')
             return str(out)

@@ -117,6 +117,33 @@ EMBED_TIMEOUT_MAX_SECONDS = 10800
 # 一级降级，被超时杀掉时连这一级也救不回成片，只能整任务失败。故按实测倍数放大。
 EMBED_TIMEOUT_X265_FACTOR = 5.0
 EMBED_TIMEOUT_MAX_SECONDS_X265 = 28800
+EMBED_TIMEOUT_MAX_SECONDS_X264_HIGH_LOAD = 43200
+
+
+class _EmbedProgressDeadline:
+    """Only timely increases in the encoded video frame counter buy extra time."""
+
+    _STALL_SECONDS = 120
+
+    def __init__(self, initial, hard_limit):
+        self.initial = initial
+        self.hard_limit = hard_limit
+        self._frame = 0
+        self._advancing_since = self._last_advance = None
+
+    @property
+    def deadline(self):
+        if self._last_advance is None or self._last_advance - self._advancing_since < 2:
+            return self.initial
+        return max(self.initial, min(self.hard_limit, self._last_advance + self._STALL_SECONDS))
+
+    def observe(self, frame, received_at):
+        if frame <= self._frame or received_at >= self.deadline:
+            return
+        if self._last_advance is None or received_at - self._last_advance >= self._STALL_SECONDS:
+            self._advancing_since = received_at
+        self._frame = frame
+        self._last_advance = received_at
 
 
 def _convert_vtt_text_to_srt_text(vtt_content: str) -> str:
@@ -4100,7 +4127,8 @@ class TaskProcessor:
                 ):
                     embedded_video_path = self._embed_subtitle_in_video(
                         task_id, self._get_original_video_for_reembed(task_id, task['video_path_local'], task_logger),
-                        translated_subtitle_path, task_logger
+                        translated_subtitle_path, task_logger,
+                        **({'bilingual_source_path': subtitle_file} if bilingual else {}),
                     )
                     if embedded_video_path:
                         # 更新视频路径为嵌入字幕的版本
@@ -4990,7 +5018,7 @@ class TaskProcessor:
             estimated_time = (max(estimated_time, video_duration * (2 + load))
                               if video_duration else 3600 * (1 + 11 * load / 10))
         ceiling = EMBED_TIMEOUT_MAX_SECONDS
-        high_ceiling = 43200
+        high_ceiling = EMBED_TIMEOUT_MAX_SECONDS_X264_HIGH_LOAD
         if normalize_cpu_codec(cpu_codec) == 'x265':
             estimated_time *= EMBED_TIMEOUT_X265_FACTOR
             ceiling = EMBED_TIMEOUT_MAX_SECONDS_X265
@@ -7302,6 +7330,35 @@ class TaskProcessor:
                 lines.append(line)
         return '\n'.join(lines)
 
+    @classmethod
+    def _reflow_bilingual_english(cls, source, paired, clean_paired):
+        # Exact source prefix establishes the boundary; never infer it by the
+        # number of Latin/Han lines in a cached translation alone.
+        prefix = source + '\n'
+        if '\n' not in source or not paired.startswith(prefix):
+            return clean_paired
+        english = cls._clean_bilingual_render_markup(source)
+        chinese = cls._clean_bilingual_render_markup(paired[len(prefix):])
+        if (clean_paired != english + '\n' + chinese
+                or not re.search(r'[\u3400-\u9fff]', chinese.partition('\n')[0])
+                or r'\N' in source or english.count('\n') != source.count('\n')):
+            return clean_paired
+        lines = english.split('\n')
+        # Width, not sentence syntax, decides ordinary prose breaks. Keep
+        # speaker labels (colon), leading dialogue/list markers, stage and
+        # formatting syntax, and technical literals out of the reflow path.
+        prose = re.compile(r"[A-Za-zÀ-ÖØ-öø-ſ0-9 ,.!?;…'‘’\"“”()\-–—]+")
+        if any(not prose.fullmatch(line)
+               or not re.search(r'[A-Za-zÀ-ÖØ-öø-ſ]', line)
+               or re.match(r'''["'“‘]?[ \t]*[-–—]|\d+[.)](?:\s|$)''', line)
+               or re.fullmatch(r'\([^()]*\)', line)
+               or re.search(r'\w\([^\s)]', line)
+               for line in lines):
+            return clean_paired
+        # Keep the hard language break, letting the existing libass WrapStyle 0
+        # fold the joined English paragraph at the real font and margins.
+        return ' '.join(lines) + '\n' + chinese
+
     def _convert_srt_to_ass(
         self,
         subtitle_path,
@@ -7314,6 +7371,7 @@ class TaskProcessor:
         prefer_single_line=True,
         single_line_min_font_scale=None,
         style_overrides=None,
+        bilingual_source_path=None,
     ):
         """将SRT/VTT字幕转换为带默认流媒体样式的ASS格式。"""
         try:
@@ -7335,9 +7393,30 @@ class TaskProcessor:
                     and _as_bool(config.get('SUBTITLE_TRANSLATION_ENABLED', False))
                     and os.path.basename(subtitle_path).startswith('translated_')):
                 from .srt_transform_engine import SrtTransformEngine, SrtTransformConfig
-                cues = SrtTransformEngine(SrtTransformConfig()).parse_srt(subtitle_content)
+                engine = SrtTransformEngine(SrtTransformConfig())
+                cues = engine.parse_srt(subtitle_content)
+                english_by_time = {}
+                target_lang = str(config.get('SUBTITLE_TARGET_LANGUAGE', 'zh')).lower().split('-')[0]
+                if (bilingual_source_path and target_lang == 'zh'
+                        and self._detect_subtitle_language(bilingual_source_path) == 'en'):
+                    from .subtitle_translator import SubtitleReader
+                    reader = (SubtitleReader.read_vtt if bilingual_source_path.lower().endswith('.vtt')
+                              else SubtitleReader.read_srt)
+                    # Readers return [] when the optional source is missing,
+                    # malformed or unreadable; keep the old layout in that case.
+                    for source in reader(bilingual_source_path, preserve_lines=True):
+                        start = engine._srt_time_to_seconds(source.start_time)
+                        end = engine._srt_time_to_seconds(source.end_time)
+                        if start is not None and end is not None and start < end:
+                            key = (start, end)
+                            english_by_time[key] = None if key in english_by_time else '\n'.join(
+                                line.strip() for line in source.source_text.splitlines() if line.strip()
+                            )
                 for cue in cues:
-                    cue['text'] = self._clean_bilingual_render_markup(cue['text'])
+                    text = cue['text']
+                    cleaned = self._clean_bilingual_render_markup(text)
+                    original = english_by_time.get((cue['start'], cue['end']))
+                    cue['text'] = self._reflow_bilingual_english(original, text, cleaned) if original else cleaned
                     cue['preserve_lines'] = True
             else:
                 cues = self._parse_subtitle_text_to_cues(
@@ -7376,7 +7455,7 @@ class TaskProcessor:
             task_logger.error(f"SRT/VTT转ASS转换失败: {str(e)}")
             return False
 
-    def _embed_subtitle_in_video(self, task_id, video_path, subtitle_path, task_logger):
+    def _embed_subtitle_in_video(self, task_id, video_path, subtitle_path, task_logger, *, bilingual_source_path=None):
         """使用FFmpeg将字幕嵌入视频（修复版本 - 添加超时机制）"""
         # 保存当前状态，稍后恢复
         task_before_encoding = get_task(task_id)
@@ -7594,6 +7673,7 @@ class TaskProcessor:
                             self._ASS_SINGLE_LINE_FONT_SCALE_MIN,
                         ),
                         style_overrides=style_overrides,
+                        bilingual_source_path=bilingual_source_path,
                     ):
                         task_logger.error("生成清晰ASS字幕失败，无法继续嵌入字幕流程")
                         update_task(task_id, upload_progress=None, status=previous_status, silent=True)
@@ -8056,7 +8136,20 @@ class TaskProcessor:
                 # 执行 FFmpeg 命令并实时获取进度。
                 # 抽成可复用函数：硬件编码失败时需要按「硬编关增强 → CPU」分级重试，
                 # 每次都走同一套进度解析与超时/取消处理，避免逻辑分叉。
-                def _execute_embed(embed_cmd, run_timeout, stage_label=''):
+                def _execute_embed(embed_cmd, run_timeout, stage_label='', *, extension=0,
+                                   overall_limit=None):
+                    from collections import deque
+
+                    stage_started_at = time.monotonic()
+                    initial_deadline = stage_started_at + run_timeout
+                    deadline_limit = initial_deadline
+                    if extension:
+                        deadline_limit = max(initial_deadline, min(
+                            initial_deadline + extension, overall_limit,
+                            stage_started_at + EMBED_TIMEOUT_MAX_SECONDS_X264_HIGH_LOAD,
+                        ))
+                    progress_deadline = _EmbedProgressDeadline(initial_deadline, deadline_limit)
+                    progress_lock = threading.Lock()
                     stage_suffix = f"[{stage_label}] " if stage_label else ''
                     proc = subprocess.Popen(
                         embed_cmd,
@@ -8070,145 +8163,114 @@ class TaskProcessor:
 
                     # 创建线程来读取输出，避免管道阻塞
                     stage_output_queue = queue.Queue()
-                    stage_error_queue = queue.Queue()
+                    stage_error_messages = deque(maxlen=50)
 
-                    def read_stream(stream, target_queue, stream_name):
+                    def read_stream(stream, is_stdout):
                         try:
-                            if stream is not None:
-                                for raw_line in stream:
-                                    target_queue.put(raw_line.strip())
-                            else:
-                                task_logger.warning(f"{stage_suffix}process.{stream_name} 为 None，无法读取输出")
-                        except Exception:
+                            for raw_line in stream:
+                                line = raw_line.strip()
+                                if is_stdout:
+                                    # FFmpeg flushes -progress to stdout. Only the video frame
+                                    # counter grants time (out_time_us can advance from audio alone).
+                                    # Observe on receipt, not when the UI/DB drains its queue.
+                                    if extension and line.startswith('frame='):
+                                        frame = line[6:].strip()
+                                        if frame.isascii() and frame.isdecimal() and len(frame) <= 12:
+                                            with progress_lock:
+                                                progress_deadline.observe(int(frame), time.monotonic())
+                                    if line.startswith('out_time_us='):
+                                        stage_output_queue.put(line)
+                                elif line:
+                                    with progress_lock:
+                                        stage_error_messages.append(line)
+                        except (OSError, ValueError):
                             pass
-                        finally:
-                            target_queue.put(None)
 
-                    # 启动读取线程
-                    output_thread = threading.Thread(
-                        target=read_stream,
-                        args=(proc.stdout, stage_output_queue, 'stdout'),
-                        daemon=True,
-                    )
-                    error_thread = threading.Thread(
-                        target=read_stream,
-                        args=(proc.stderr, stage_error_queue, 'stderr'),
-                        daemon=True,
-                    )
-                    output_thread.start()
-                    error_thread.start()
+                    output_thread = threading.Thread(target=read_stream, args=(proc.stdout, True), daemon=True)
+                    error_thread = threading.Thread(target=read_stream, args=(proc.stderr, False), daemon=True)
+                    for reader in (output_thread, error_thread):
+                        reader.start()
 
-                    # 实时解析进度
                     stage_last_time = 0
-                    stage_start_time = time.time()
-                    stage_last_progress_time = stage_start_time
-                    stage_error_messages = []
                     stage_timed_out = False
-
-                    while True:
-                        if is_task_cancelled(task_id):
-                            task_logger.info(f"{stage_suffix}检测到任务取消请求，终止FFmpeg转码")
-                            proc.terminate()
-                            try:
-                                proc.wait(timeout=PROCESS_TERMINATE_WAIT_SECONDS)
-                            except subprocess.TimeoutExpired:
-                                if proc.poll() is None:
-                                    proc.kill()
-                            raise TaskCancelledError("任务已取消")
-                        # 检查超时
-                        if time.time() - stage_start_time > run_timeout:
-                            task_logger.error(f"{stage_suffix}FFmpeg处理超时（{run_timeout//60}分钟），强制终止")
-                            # 标记「这是超时」而不是靠错误文本推断：超时被杀时
-                            # stderr 里没有设备/参数类关键字，按「未知错误」处理会
-                            # 让长视频先按同一硬编器把整片再跑一遍（最现实的失败
-                            # 类型反而拿到最差的降级策略）。
-                            stage_timed_out = True
-                            proc.terminate()
-                            try:
-                                proc.wait(timeout=PROCESS_TERMINATE_WAIT_SECONDS)
-                            except subprocess.TimeoutExpired:
-                                if proc.poll() is None:
-                                    proc.kill()
-                            break
-
-                        # 检查进程状态
-                        if proc.poll() is not None:
-                            break
-
-                        # 读取输出
-                        try:
-                            line = stage_output_queue.get(timeout=1)
-                            if line is None:
+                    extension_logged = False
+                    try:
+                        while True:
+                            if is_task_cancelled(task_id):
+                                task_logger.info(f"{stage_suffix}检测到任务取消请求，终止FFmpeg转码")
+                                raise TaskCancelledError("任务已取消")
+                            if proc.poll() is not None:
                                 break
 
-                            if line.startswith('out_time_us='):
+                            with progress_lock:
+                                now = time.monotonic()
+                                deadline = progress_deadline.deadline
+                            if now >= deadline:
+                                stage_timed_out = True
+                                break
+                            if now >= initial_deadline and not extension_logged:
+                                task_logger.info(f"{stage_suffix}FFmpeg 编码仍在推进，有限延长烧录时限"
+                                                 f"（最多额外 {deadline_limit - initial_deadline:.0f} 秒）")
+                                extension_logged = True
+
+                            try:
+                                line = stage_output_queue.get(timeout=min(1, deadline - now))
+                            except queue.Empty:
+                                continue
+                            try:
+                                current_time = int(line.partition('=')[2]) / 1_000_000
+                            except ValueError:
+                                continue
+                            if video_duration and current_time > stage_last_time:
+                                progress = min((current_time / video_duration) * 100, 100)
+                                update_task(task_id, upload_progress=f"{progress:.1f}%", silent=True)
+                                stage_last_time = current_time
+                    finally:
+                        try:
+                            if proc.poll() is None:
+                                if stage_timed_out:
+                                    task_logger.error(
+                                        f"{stage_suffix}FFmpeg处理超时，强制终止（初始预算 {run_timeout:g} 秒）"
+                                    )
+                                proc.terminate()
                                 try:
-                                    # 解析当前处理时间（微秒）
-                                    time_us = int(line.split('=')[1])
-                                    current_time = time_us / 1000000.0  # 转换为秒
+                                    proc.wait(timeout=PROCESS_TERMINATE_WAIT_SECONDS)
+                                except subprocess.TimeoutExpired:
+                                    proc.kill()
+                                    # Don't start a fallback while this FFmpeg still owns the output.
+                                    proc.wait(timeout=PROCESS_TERMINATE_WAIT_SECONDS)
+                            else:
+                                # No signal was needed; don't discard a natural exit at the boundary.
+                                stage_timed_out = False
+                        finally:
+                            # Keep trailing diagnostics for the existing fallback classification.
+                            for reader in (output_thread, error_thread):
+                                reader.join(timeout=1)
+                            for stream, reader in ((proc.stdout, output_thread), (proc.stderr, error_thread)):
+                                if not reader.is_alive():
+                                    stream.close()
 
-                                    if video_duration and current_time > stage_last_time:
-                                        progress = min((current_time / video_duration) * 100, 100)
-                                        # 更新任务进度显示
-                                        update_task(task_id, upload_progress=f"{progress:.1f}%", silent=True)
-                                        stage_last_time = current_time
-                                        stage_last_progress_time = time.time()
-                                except (ValueError, IndexError):
-                                    continue
-                        except queue.Empty:
-                            # 检查是否长时间没有进度更新（可能卡死了）
-                            if time.time() - stage_last_progress_time > 300:  # 5分钟没有进度更新
-                                task_logger.debug(f"{stage_suffix}长时间没有进度更新，可能处理卡死")
-                            continue
-
-                        # 读取错误信息
-                        try:
-                            error_line = stage_error_queue.get_nowait()
-                            if error_line:
-                                stage_error_messages.append(error_line)
-                                if len(stage_error_messages) > 50:  # 限制错误信息数量
-                                    stage_error_messages.pop(0)
-                        except queue.Empty:
-                            pass
-
-                    # 等待进程完成
-                    try:
-                        proc.wait(timeout=30)  # 最多等待30秒
-                    except subprocess.TimeoutExpired:
-                        task_logger.error(f"{stage_suffix}进程未能在30秒内正常结束，强制终止")
-                        proc.kill()
-
-                    # 进程退出后必须把管线里剩余的错误行排空：读取线程只 start 不
-                    # join 时，`Unrecognized option` / `Error setting option` 这类
-                    # 参数错误恰好落在 stderr 最后几行，会被竞态漏掉 —— 而它们正是
-                    # 分级降级决策依赖的信号。先 join 让线程读到 EOF，再排空队列。
-                    for stream_thread in (output_thread, error_thread):
-                        try:
-                            stream_thread.join(timeout=1.0)
-                        except Exception:
-                            pass
-                    for _ in range(200):
-                        try:
-                            drained = stage_error_queue.get_nowait()
-                        except queue.Empty:
-                            break
-                        if drained:
-                            stage_error_messages.append(drained)
-                            if len(stage_error_messages) > 50:  # 限制错误信息数量
-                                stage_error_messages.pop(0)
-
-                    error_text = '\n'.join(stage_error_messages)
+                    with progress_lock:
+                        error_text = '\n'.join(stage_error_messages)
                     return proc.returncode, error_text, os.path.exists(simple_output), stage_timed_out
 
                 # 超时预算必须从**首次尝试之前**开始计：此前 deadline 在首轮返回
                 # 之后才建立，首轮已消耗的时间没有从预算里扣掉。
                 embed_started_at = time.monotonic()
                 first_stage_budget = max(300.0, float(timeout))
+                # Extend only the built-in libx264 path. Custom FFmpeg arguments can
+                # replace the encoder/output/progress protocol; leave their limits alone.
+                def _x264_extension(budget):
+                    return 0 if custom_video_params else min(budget / 4, 900)
+
+                first_extension = _x264_extension(first_stage_budget) if (
+                    actual_encoder == 'cpu' and cpu_codec == 'x264') else 0
                 process_returncode, error_output_full, output_ready, first_timed_out = _execute_embed(
-                    cmd, first_stage_budget
+                    cmd, first_stage_budget, extension=first_extension,
+                    overall_limit=embed_started_at + first_stage_budget + first_extension,
                 )
 
-                if process_returncode == 0 and output_ready:
+                if not first_timed_out and process_returncode == 0 and output_ready:
                     # 成功：优先原子替换，避免重复复制大文件
                     self._finalize_embedded_video_output(simple_output, embedded_video_path)
                     _log_output_media_summary(embedded_video_path)
@@ -8378,10 +8440,16 @@ class TaskProcessor:
                     )
                     task_logger.debug(f"回退FFmpeg命令({stage_label}): {' '.join(cmd_retry)}")
 
+                    # Built-in libx264 is the terminal fallback. It can spend only
+                    # its own extension, even when the original overall budget is
+                    # almost spent; no extension is reserved for hardware or x265.
+                    extension = _x264_extension(stage_timeout) if (
+                        stage == 'cpu_x264' or (stage == 'cpu' and cpu_codec == 'x264')) else 0
                     retry_returncode, retry_error, retry_ready, _stage_timed_out = _execute_embed(
-                        cmd_retry, stage_timeout, stage_label
+                        cmd_retry, stage_timeout, stage_label, extension=extension,
+                        overall_limit=overall_deadline + extension,
                     )
-                    if retry_returncode == 0 and retry_ready:
+                    if not _stage_timed_out and retry_returncode == 0 and retry_ready:
                         self._finalize_embedded_video_output(simple_output, embedded_video_path)
                         _log_output_media_summary(embedded_video_path)
                         task_logger.info(f"字幕嵌入完成: {embedded_video_path}（{stage_label}回退）")
@@ -9270,7 +9338,9 @@ class TaskProcessor:
                 if not embed_source:
                     return None
                 embedded_video_path = self._embed_subtitle_in_video(
-                    task_id, embed_source, subtitle_path_translated, task_logger
+                    task_id, embed_source, subtitle_path_translated, task_logger,
+                    **({'bilingual_source_path': subtitle_path_original}
+                       if _as_bool(self.config.get('SUBTITLE_BILINGUAL_ENABLED', False)) else {}),
                 )
                 if embedded_video_path:
                     update_task(
