@@ -118,32 +118,21 @@ EMBED_TIMEOUT_MAX_SECONDS = 10800
 EMBED_TIMEOUT_X265_FACTOR = 5.0
 EMBED_TIMEOUT_MAX_SECONDS_X265 = 28800
 EMBED_TIMEOUT_MAX_SECONDS_X264_HIGH_LOAD = 43200
+EMBED_X264_IDLE_SECONDS = 20 * 60
 
 
-class _EmbedProgressDeadline:
-    """Only timely increases in the encoded video frame counter buy extra time."""
+class _EmbedFrameDeadline:
+    """Idle deadline for one built-in libx264 process."""
 
-    _STALL_SECONDS = 120
-
-    def __init__(self, initial, hard_limit):
-        self.initial = initial
-        self.hard_limit = hard_limit
+    def __init__(self, started_at):
+        self.deadline = started_at + EMBED_X264_IDLE_SECONDS
         self._frame = 0
-        self._advancing_since = self._last_advance = None
-
-    @property
-    def deadline(self):
-        if self._last_advance is None or self._last_advance - self._advancing_since < 2:
-            return self.initial
-        return max(self.initial, min(self.hard_limit, self._last_advance + self._STALL_SECONDS))
 
     def observe(self, frame, received_at):
         if frame <= self._frame or received_at >= self.deadline:
             return
-        if self._last_advance is None or received_at - self._last_advance >= self._STALL_SECONDS:
-            self._advancing_since = received_at
         self._frame = frame
-        self._last_advance = received_at
+        self.deadline = received_at + EMBED_X264_IDLE_SECONDS
 
 
 def _convert_vtt_text_to_srt_text(vtt_content: str) -> str:
@@ -319,6 +308,8 @@ _TASK_CANCEL_FLAGS = {}
 _TASK_CANCEL_LOCK = threading.Lock()
 _ACTIVE_TASK_IDS = set()
 _ACTIVE_TASKS_LOCK = threading.Lock()
+# Only live FFmpeg children, not task admission or ownership.
+_WATCHED_X264_PROCESSES = {}
 _TASK_SCHEDULING_LOCK = threading.RLock()
 
 
@@ -2438,6 +2429,13 @@ def reset_stuck_tasks(skip_active=False, cancel_active=False):
                 task_id = task[0]
                 old_status = task[1]
                 updated_at = task[2]
+
+                # The row may have been selected before FFmpeg entered encoding.
+                with _ACTIVE_TASKS_LOCK:
+                    running_x264 = any(proc.poll() is None for proc in
+                                       _WATCHED_X264_PROCESSES.get(task_id, ()))
+                if running_x264:
+                    continue  # This child has its own no-new-frame deadline.
 
                 if skip_active and _is_task_active(task_id):
                     # UPOS PUT has its own finite recovery deadline. A stale DB
@@ -8130,40 +8128,36 @@ class TaskProcessor:
                     video_duration, cpu_codec if actual_encoder == 'cpu' else None,
                     input_width, input_height, stream_info.get('fps')
                 )
-                
-                task_logger.debug(f"设置处理超时时间: {timeout//60} 分钟")
-                
+                first_watch_frames = not custom_video_params and actual_encoder == 'cpu' and cpu_codec == 'x264'
+                if not first_watch_frames:
+                    task_logger.debug(f"设置处理超时时间: {timeout//60} 分钟")
+
                 # 执行 FFmpeg 命令并实时获取进度。
                 # 抽成可复用函数：硬件编码失败时需要按「硬编关增强 → CPU」分级重试，
                 # 每次都走同一套进度解析与超时/取消处理，避免逻辑分叉。
-                def _execute_embed(embed_cmd, run_timeout, stage_label='', *, extension=0,
-                                   overall_limit=None):
+                def _execute_embed(embed_cmd, run_timeout, stage_label='', *, watch_frames=False):
                     from collections import deque
 
-                    stage_started_at = time.monotonic()
-                    initial_deadline = stage_started_at + run_timeout
-                    deadline_limit = initial_deadline
-                    if extension:
-                        deadline_limit = max(initial_deadline, min(
-                            initial_deadline + extension, overall_limit,
-                            stage_started_at + EMBED_TIMEOUT_MAX_SECONDS_X264_HIGH_LOAD,
-                        ))
-                    progress_deadline = _EmbedProgressDeadline(initial_deadline, deadline_limit)
                     progress_lock = threading.Lock()
                     stage_suffix = f"[{stage_label}] " if stage_label else ''
-                    proc = subprocess.Popen(
-                        embed_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        cwd=temp_dir,  # 在临时目录执行
-                        encoding='utf-8',
-                        errors='replace'  # 遇到无法解码的字符时用?替换
-                    )
 
-                    # 创建线程来读取输出，避免管道阻塞
+                    # 复用同一监督循环；内置 x264 的 SQLite 写入不能阻塞它。
                     stage_output_queue = queue.Queue()
                     stage_error_messages = deque(maxlen=50)
+                    progress_writes = queue.Queue(maxsize=1) if watch_frames else None
+                    stop_writes = threading.Event() if watch_frames else None
+
+                    def write_progress():
+                        while not stop_writes.is_set():
+                            try:
+                                progress = progress_writes.get(timeout=0.1)
+                            except queue.Empty:
+                                continue
+                            if not stop_writes.is_set():
+                                try:
+                                    update_task(task_id, upload_progress=progress, silent=True)
+                                except Exception as exc:
+                                    task_logger.warning("烧录进度写入失败: %s", exc)
 
                     def read_stream(stream, is_stdout):
                         try:
@@ -8173,11 +8167,11 @@ class TaskProcessor:
                                     # FFmpeg flushes -progress to stdout. Only the video frame
                                     # counter grants time (out_time_us can advance from audio alone).
                                     # Observe on receipt, not when the UI/DB drains its queue.
-                                    if extension and line.startswith('frame='):
+                                    if watch_frames and line.startswith('frame='):
                                         frame = line[6:].strip()
                                         if frame.isascii() and frame.isdecimal() and len(frame) <= 12:
                                             with progress_lock:
-                                                progress_deadline.observe(int(frame), time.monotonic())
+                                                frame_deadline.observe(int(frame), time.monotonic())
                                     if line.startswith('out_time_us='):
                                         stage_output_queue.put(line)
                                 elif line:
@@ -8186,15 +8180,36 @@ class TaskProcessor:
                         except (OSError, ValueError):
                             pass
 
+                    if watch_frames:
+                        task_logger.debug("内置 libx264 烧录：无总时限，连续 20 分钟无新视频帧才超时")
+                    stage_started_at = time.monotonic()
+                    frame_deadline = _EmbedFrameDeadline(stage_started_at) if watch_frames else None
+                    fixed_deadline = None if watch_frames else stage_started_at + run_timeout
+                    proc = subprocess.Popen(
+                        embed_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        cwd=temp_dir,  # 在临时目录执行
+                        encoding='utf-8',
+                        errors='replace'  # 遇到无法解码的字符时用?替换
+                    )
+                    if watch_frames:
+                        with _ACTIVE_TASKS_LOCK:
+                            _WATCHED_X264_PROCESSES.setdefault(task_id, set()).add(proc)
+
                     output_thread = threading.Thread(target=read_stream, args=(proc.stdout, True), daemon=True)
                     error_thread = threading.Thread(target=read_stream, args=(proc.stderr, False), daemon=True)
-                    for reader in (output_thread, error_thread):
-                        reader.start()
-
+                    writer = threading.Thread(target=write_progress, daemon=True) if watch_frames else None
                     stage_last_time = 0
+                    last_progress_text = None
+                    last_progress_queued_at = stage_started_at
                     stage_timed_out = False
-                    extension_logged = False
                     try:
+                        for reader in (output_thread, error_thread):
+                            reader.start()
+                        if writer is not None:
+                            writer.start()
                         while True:
                             if is_task_cancelled(task_id):
                                 task_logger.info(f"{stage_suffix}检测到任务取消请求，终止FFmpeg转码")
@@ -8204,14 +8219,10 @@ class TaskProcessor:
 
                             with progress_lock:
                                 now = time.monotonic()
-                                deadline = progress_deadline.deadline
+                                deadline = frame_deadline.deadline if watch_frames else fixed_deadline
                             if now >= deadline:
                                 stage_timed_out = True
                                 break
-                            if now >= initial_deadline and not extension_logged:
-                                task_logger.info(f"{stage_suffix}FFmpeg 编码仍在推进，有限延长烧录时限"
-                                                 f"（最多额外 {deadline_limit - initial_deadline:.0f} 秒）")
-                                extension_logged = True
 
                             try:
                                 line = stage_output_queue.get(timeout=min(1, deadline - now))
@@ -8222,15 +8233,29 @@ class TaskProcessor:
                             except ValueError:
                                 continue
                             if video_duration and current_time > stage_last_time:
-                                progress = min((current_time / video_duration) * 100, 100)
-                                update_task(task_id, upload_progress=f"{progress:.1f}%", silent=True)
+                                progress = f"{min(current_time / video_duration * 100, 100):.1f}%"
+                                if not watch_frames:
+                                    update_task(task_id, upload_progress=progress, silent=True)
+                                # Advancing media can round to the same percentage for a long time.
+                                # Keep updated_at fresh even after the child exits and the reaper sees it.
+                                elif progress != last_progress_text or now - last_progress_queued_at >= 60:
+                                    try:
+                                        progress_writes.put_nowait(progress)
+                                        last_progress_text = progress
+                                        last_progress_queued_at = now
+                                    except queue.Full:
+                                        pass  # UI progress is best-effort while SQLite is busy.
                                 stage_last_time = current_time
                     finally:
+                        if watch_frames:
+                            stop_writes.set()
                         try:
                             if proc.poll() is None:
                                 if stage_timed_out:
+                                    reason = ('连续 20 分钟无新视频帧' if watch_frames else
+                                              f'初始预算 {run_timeout:g} 秒')
                                     task_logger.error(
-                                        f"{stage_suffix}FFmpeg处理超时，强制终止（初始预算 {run_timeout:g} 秒）"
+                                        f"{stage_suffix}FFmpeg处理超时，强制终止（{reason}）"
                                     )
                                 proc.terminate()
                                 try:
@@ -8243,13 +8268,25 @@ class TaskProcessor:
                                 # No signal was needed; don't discard a natural exit at the boundary.
                                 stage_timed_out = False
                         finally:
+                            if watch_frames:
+                                with _ACTIVE_TASKS_LOCK:
+                                    running = _WATCHED_X264_PROCESSES[task_id]
+                                    running.discard(proc)
+                                    if not running:
+                                        del _WATCHED_X264_PROCESSES[task_id]
                             # Keep trailing diagnostics for the existing fallback classification.
                             for reader in (output_thread, error_thread):
-                                reader.join(timeout=1)
+                                if reader.ident is not None:
+                                    reader.join(timeout=1)
                             for stream, reader in ((proc.stdout, output_thread), (proc.stderr, error_thread)):
                                 if not reader.is_alive():
                                     stream.close()
+                            # FFmpeg has already exited; finish any in-flight write before clearing progress.
+                            if writer is not None and writer.ident is not None:
+                                writer.join()
 
+                    if watch_frames:
+                        _raise_if_cancelled(task_id, task_logger)
                     with progress_lock:
                         error_text = '\n'.join(stage_error_messages)
                     return proc.returncode, error_text, os.path.exists(simple_output), stage_timed_out
@@ -8258,16 +8295,11 @@ class TaskProcessor:
                 # 之后才建立，首轮已消耗的时间没有从预算里扣掉。
                 embed_started_at = time.monotonic()
                 first_stage_budget = max(300.0, float(timeout))
-                # Extend only the built-in libx264 path. Custom FFmpeg arguments can
+                # Watch only built-in libx264. Custom FFmpeg arguments can
                 # replace the encoder/output/progress protocol; leave their limits alone.
-                def _x264_extension(budget):
-                    return 0 if custom_video_params else min(budget / 4, 900)
-
-                first_extension = _x264_extension(first_stage_budget) if (
-                    actual_encoder == 'cpu' and cpu_codec == 'x264') else 0
+                builtin_params = not custom_video_params
                 process_returncode, error_output_full, output_ready, first_timed_out = _execute_embed(
-                    cmd, first_stage_budget, extension=first_extension,
-                    overall_limit=embed_started_at + first_stage_budget + first_extension,
+                    cmd, first_stage_budget, watch_frames=first_watch_frames,
                 )
 
                 if not first_timed_out and process_returncode == 0 and output_ready:
@@ -8356,12 +8388,7 @@ class TaskProcessor:
                 if first_timed_out:
                     retry_stages = self._drop_same_encoder_stage_after_timeout(retry_stages)
 
-                # 总预算 = 首轮尝试 + 各降级阶段各自的合理预算（从首轮**之前**开始
-                # 计）。单阶段上限取该阶段编码器的估算，因此 libx265 阶段拿到的是
-                # 放大后的 5 倍预算，而不会挤掉首轮的时间；阶段数由
-                # _resolve_embed_retry_stages 固定（至多 3 级），总时长有界。
-                # 此前 deadline 建在首轮返回之后（首轮不计入），且 CPU 回退阶段
-                # 一律沿用 x264 预算 —— 长视频会在 x265 编码中途被强杀。
+                # 保留原累计预算供有限时的阶段使用；末尾的内置 libx264 不受它约束。
                 def _stage_budget(stage):
                     return self._embed_stage_budget(
                         video_duration, cpu_codec, stage, first_stage_budget,
@@ -8371,19 +8398,24 @@ class TaskProcessor:
                 overall_deadline = embed_started_at + first_stage_budget + sum(
                     _stage_budget(stage) for stage in retry_stages
                 )
-                # 最坏挂起时长在日志里可见：新增 cpu_x264 一级后 20 分钟素材的
-                # 总预算可达 8 小时（x265 的 CPU 阶段单级就是 5 倍），卡住的 ffmpeg
-                # 光看日志无法判断上限，排查时只能猜。这里记一条 info。
+
+                def _watch_retry_frames(stage):
+                    return builtin_params and (
+                        stage == 'cpu_x264' or (stage == 'cpu' and cpu_codec == 'x264')
+                    )
+
+                watched_fallback = any(_watch_retry_frames(stage) for stage in retry_stages)
                 if retry_stages:
                     task_logger.info(
-                        "降级重试预算：首轮 %d 分钟 + %s = 最坏总时长约 %d 分钟（%s）",
+                        "降级重试时限：首轮 %d 分钟；%s；%s",
                         int(first_stage_budget // 60),
                         ' + '.join(
-                            f'{stage} {int(_stage_budget(stage) // 60)} 分钟'
+                            f'{stage} 连续 20 分钟无新视频帧' if _watch_retry_frames(stage)
+                            else f'{stage} {int(_stage_budget(stage) // 60)} 分钟'
                             for stage in retry_stages
                         ),
-                        int((overall_deadline - embed_started_at) // 60),
-                        '/'.join(retry_stages),
+                        '内置 libx264 不受累计预算限制' if watched_fallback else
+                        f'最坏总时长约 {int((overall_deadline - embed_started_at) // 60)} 分钟',
                     )
 
                 for stage in retry_stages:
@@ -8391,13 +8423,19 @@ class TaskProcessor:
                         task_logger.info("检测到任务取消请求，跳过FFmpeg回退方案")
                         raise TaskCancelledError("任务已取消")
 
+                    watch_frames = _watch_retry_frames(stage)
                     remaining_s = overall_deadline - time.monotonic()
-                    if remaining_s <= 0:
+                    if not watch_frames and remaining_s <= 0:
+                        if not watched_fallback:
+                            task_logger.warning(
+                                "回退总超时预算已耗尽，跳过剩余降级阶段: %s",
+                                '/'.join(retry_stages[retry_stages.index(stage):]),
+                            )
+                            break
                         task_logger.warning(
-                            "回退总超时预算已耗尽，跳过剩余降级阶段: %s",
-                            '/'.join(retry_stages[retry_stages.index(stage):]),
+                            "回退总超时预算已耗尽，跳过降级阶段: %s", stage,
                         )
-                        break
+                        continue
 
                     if stage == 'hw_no_boost':
                         stage_label = f"{actual_encoder} 关闭质量增强"
@@ -8440,14 +8478,8 @@ class TaskProcessor:
                     )
                     task_logger.debug(f"回退FFmpeg命令({stage_label}): {' '.join(cmd_retry)}")
 
-                    # Built-in libx264 is the terminal fallback. It can spend only
-                    # its own extension, even when the original overall budget is
-                    # almost spent; no extension is reserved for hardware or x265.
-                    extension = _x264_extension(stage_timeout) if (
-                        stage == 'cpu_x264' or (stage == 'cpu' and cpu_codec == 'x264')) else 0
                     retry_returncode, retry_error, retry_ready, _stage_timed_out = _execute_embed(
-                        cmd_retry, stage_timeout, stage_label, extension=extension,
-                        overall_limit=overall_deadline + extension,
+                        cmd_retry, stage_timeout, stage_label, watch_frames=watch_frames,
                     )
                     if not _stage_timed_out and retry_returncode == 0 and retry_ready:
                         self._finalize_embedded_video_output(simple_output, embedded_video_path)

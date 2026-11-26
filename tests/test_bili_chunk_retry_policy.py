@@ -167,7 +167,8 @@ class RetryTests(unittest.TestCase):
         source=ast.parse((SOURCE/'modules/task_manager.py').read_text())
         env={'threading':threading,'_TASK_CANCEL_LOCK':threading.Lock(),'_TASK_CANCEL_FLAGS':{},'time':time,
              'logger':types.SimpleNamespace(warning=lambda *a:None,info=lambda *a:None,error=lambda *a:None),
-             'PROCESSING_STATES':['uploading'],'_is_task_active':lambda tid:True}
+             'PROCESSING_STATES':['uploading'],'_is_task_active':lambda tid:True,
+             '_ACTIVE_TASKS_LOCK':threading.Lock(),'_WATCHED_X264_PROCESSES':{}}
         class Connection:
             def execute(self,*a):return self
             def fetchall(self):return [('fixture','uploading','2000-01-01')]
